@@ -4,7 +4,7 @@ Ce fichier s'adresse à tout assistant (ChatGPT, Codex, Claude...). Ce dépôt e
 
 ## 1. Lire dans cet ordre
 
-1. [README.md](README.md) : ce qu'est privasoc+, où on en est, carte des fichiers.
+1. [README.md](README.md) (anglais) ou [README.fr.md](README.fr.md) (français) : ce qu'est privasoc+, où on en est, carte des fichiers.
 2. [docs/PROGRESS.md](docs/PROGRESS.md) : ce qui est fait, sur quelles branches, comment le vérifier, prochaines actions.
 3. [docs/CONTEXT.md](docs/CONTEXT.md) : les deux paquets (`packages/privasoc`, `packages/gateway`), leurs mécanismes et les identifiants de décision cités.
 4. [docs/DECISIONS.md](docs/DECISIONS.md) : **seul ce qui y est écrit est décidé**. Décisions PD, constats N, questions ouvertes Q.
@@ -30,7 +30,7 @@ Ce fichier s'adresse à tout assistant (ChatGPT, Codex, Claude...). Ce dépôt e
 
 - Ajouter les décisions et constats dans `docs/DECISIONS.md` : même format de tableau, prochain identifiant libre (PD, N ou Q). **Ne jamais réécrire** une entrée passée : la barrer (`~~...~~`) et renvoyer à sa remplaçante.
 - Mettre à jour la colonne **Statut** du tableau de suivi et la section « Prochaine action » de `docs/INTEGRATION_PLAN.md`.
-- Mettre à jour `docs/PROGRESS.md` (fait, branches et commits, vérification, prochaines actions) et la section « État actuel » de `README.md`.
+- Mettre à jour `docs/PROGRESS.md` (fait, branches et commits, vérification, prochaines actions) et la section d'état de `README.md` et de `README.fr.md`.
 - Vérifier avant de committer :
   ```bash
   uv sync --all-packages
@@ -50,4 +50,4 @@ Ce fichier s'adresse à tout assistant (ChatGPT, Codex, Claude...). Ce dépôt e
 2. **Anonymat** : aucun nom réel, identifiant personnel, adresse IP ou domaine réel, nom de machine ni chemin local, dans le code, les tests, les docs ou les commits (voir N41 pour l'état actuel du dépôt distant). Utiliser des valeurs fictives : `jdoe`, `laptop-01`, `192.168.1.0/24`, `example.org`.
 3. **Mesurer avant d'automatiser** : un chiffre n'est publié qu'avec son protocole ; le holdout ne sert jamais au réglage ; les seuils et coûts sont fixés dans DECISIONS **avant** la mesure.
 4. Les fixtures Elastic (ELv2) sont téléchargées à l'exécution, jamais committées ni citées dans un rapport, et jamais envoyées à un modèle externe (PD19).
-5. Style : français pour `docs/`, `diagram/` et les fichiers racine ; anglais dans `packages/` (code, docs des paquets) et les messages de commit ; dates au format AAAA-MM-JJ ; pas de tiret cadratin.
+5. Style : français pour `docs/`, `diagram/` et les fichiers racine, sauf `README.md` en anglais avec sa version `README.fr.md` à tenir alignée (PD30) ; anglais dans `packages/` (code, docs des paquets) et les messages de commit ; dates au format AAAA-MM-JJ ; pas de tiret cadratin.

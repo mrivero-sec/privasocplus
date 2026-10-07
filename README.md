@@ -1,104 +1,108 @@
 # privasoc+
 
-**Un SOC local qui trie ses alertes avec un petit LLM local, et ne demande un second avis à un modèle frontière qu'à travers une passerelle qui vérifie que rien de personnel ne sort.**
+**English** | [Français](README.fr.md)
 
-privasoc+ réunit deux briques dans un seul dépôt :
+**A local SOC that triages its alerts with a small local LLM, and asks a frontier model for a second opinion only through a gateway that checks nothing personal leaves.**
 
-- **privasoc** : collecte de logs (Vector), parseurs écrits par le modèle local et approuvés par un humain, détection Sigma, triage structuré des alertes, banc d'évaluation. Tout est pseudonymisé avant d'atteindre un modèle, même local.
-- **sovgate** : passerelle de sortie compatible OpenAI. Pour privasoc, elle ne pseudonymise pas une seconde fois : elle **vérifie** que seuls des jetons émis par privasoc sortent, isole les preuves (spotlighting contre l'injection) et tient un journal d'audit chaîné.
+privasoc+ brings two components together in one repository:
 
-Assistants IA : commencez par [AGENTS.md](AGENTS.md).
+- **privasoc**: log collection (Vector), parsers written by the local model and approved by a human, Sigma detection, structured alert triage, an evaluation bench. Everything is pseudonymised before it reaches a model, even a local one.
+- **sovgate**: an OpenAI-compatible egress gateway. For privasoc it does not pseudonymise a second time: it **verifies** that only tokens minted by privasoc leave, isolates the evidence (spotlighting against prompt injection) and keeps a hash-chained audit log.
 
-## État (2026-10-07)
+AI assistants: start with [AGENTS.md](AGENTS.md) (in French).
 
-| Phase | État |
+## Status (2026-10-07)
+
+| Phase | Status |
 |---|---|
-| P1 Sortie sécurisée privasoc vers sovgate | implémentée, testée avec un fournisseur simulé ; Docker et NER réel encore à valider |
-| P0 Mesure du triage | banc de 38 cas et harnais livrés, seuils fixés avant toute mesure ; **aucun résultat de modèle encore** |
-| P2 à P10 Enrichissement, signaux, routage, fiche de faits | à faire ([plan](docs/INTEGRATION_PLAN.md)) |
+| P1 Secure way out, privasoc to sovgate | implemented, tested against a simulated provider; Docker and real NER still to validate |
+| P0 Triage measurement | 38-case bench and harness delivered, thresholds fixed before any measurement; **no model results yet** |
+| P2 to P10 Enrichment, signals, routing, fact sheet | to do ([plan](docs/INTEGRATION_PLAN.md), in French) |
 
-Le triage distant reste une action humaine : rien n'escalade automatiquement. Détail et reprise : [docs/PROGRESS.md](docs/PROGRESS.md).
+Remote triage stays a human action: nothing escalates automatically. Details and hand-over: [docs/PROGRESS.md](docs/PROGRESS.md) (in French).
 
 ## Architecture
 
 ![Architecture v3](diagram/architecture-v3.png)
 
-1. **Enrichir d'abord** avec du contexte local (historique de l'hôte, alertes passées de la règle, inventaire, IOC locaux), puis relancer le triage local.
-2. **Détecter l'incertitude par des faits** : désaccord entre deux modèles locaux, affirmations du modèle vérifiées dans la base, contrôles de validation. La confiance que le modèle se donne n'est qu'un signal secondaire ([pourquoi](docs/alternatives.md)).
-3. **Router selon l'enjeu** vers le local, un modèle frontière ou l'analyste. Un verdict « bénin » sur une alerte grave va toujours à l'analyste ; le modèle frontière n'abaisse jamais seul un verdict.
-4. **Envoyer une fiche de faits**, pas les logs : résumé structuré et pseudonymisé, sans chaînes contrôlées par l'attaquant.
-5. **privasoc pseudonymise, sovgate vérifie** : seule la passerelle a accès au fournisseur ; une adresse absente du manifeste de jetons bloque l'envoi.
-6. **Mesurer en continu** par audit aléatoire des alertes closes ; plus tard, routage appris et modèle frontière « professeur » du modèle local.
+1. **Enrich first** with local context (host history, past alerts of the rule, asset inventory, local IOCs), then run the local triage again.
+2. **Detect uncertainty from facts**: disagreement between two local models, model claims checked against the database, validation checks. The confidence the model gives itself is only a secondary signal ([why](docs/alternatives.md)).
+3. **Route by stakes** to the local model, a frontier model or the analyst. A "benign" verdict on a severe alert always goes to the analyst; the frontier model never lowers a verdict on its own.
+4. **Send a fact sheet**, not logs: a structured, pseudonymised summary without attacker-controlled strings.
+5. **privasoc pseudonymises, sovgate verifies**: only the gateway can reach the provider; an address missing from the token manifest blocks the call.
+6. **Measure continuously** through random audits of closed alerts; later, learned routing and a frontier model acting as the local model's "teacher".
 
-Les points 1 à 4 et 6 sont planifiés ; le point 5 et la mesure (banc de triage) sont implémentés.
+Points 1 to 4 and 6 are planned; point 5 and the measurement (triage bench) are implemented.
 
-## Organisation
+## Layout
 
-| Chemin | Contenu |
+| Path | Content |
 |---|---|
-| [packages/privasoc](packages/privasoc) | SOC local (paquet `privasoc`, CLI `privasoc`) |
-| [packages/gateway](packages/gateway) | passerelle sovgate (paquet `sovereign-llm-gateway`) |
-| [integration/](integration/) | tests de contrat entre les deux |
-| [deploy/](deploy/) | composition Docker : privasoc, Vector, modèle local, passerelle en option |
-| [docs/](docs/), [diagram/](diagram/) | conception, décisions, plan, avancement |
+| [packages/privasoc](packages/privasoc) | local SOC (package `privasoc`, CLI `privasoc`) |
+| [packages/gateway](packages/gateway) | sovgate gateway (package `sovereign-llm-gateway`) |
+| [integration/](integration/) | contract tests between the two |
+| [deploy/](deploy/) | Docker composition: privasoc, Vector, local model, optional gateway |
+| [docs/](docs/), [diagram/](diagram/) | design, decisions, plan, progress (in French) |
 
-Un workspace [uv](https://docs.astral.sh/uv/) : un `pyproject.toml` et un `uv.lock` à la racine.
+A [uv](https://docs.astral.sh/uv/) workspace: one `pyproject.toml` and one `uv.lock` at the root.
 
-## Démarrer
+## Getting started
 
-Prérequis : uv, le binaire [Vector](https://vector.dev/download/) (bac à sable des parseurs) et un serveur compatible OpenAI pour le modèle local, par exemple [Ollama](https://ollama.com) avec `qwen3:8b`.
+Requirements: uv, the [Vector](https://vector.dev/download/) binary (the parser sandbox) and an OpenAI-compatible server for the local model, for example [Ollama](https://ollama.com) with `qwen3:8b`.
 
 ```bash
 uv sync --all-packages
 cd packages/privasoc
-uv run privasoc init                 # écrit .env avec des secrets neufs ; y régler le modèle et Vector
-uv run privasoc serve                # API et interface de revue sur http://127.0.0.1:8000/ui/
+uv run privasoc init                 # writes .env with fresh secrets; set the model and Vector there
+uv run privasoc serve                # API and review UI on http://127.0.0.1:8000/ui/
 ```
 
-Le guide complet de privasoc (onboarding d'une source, parseurs, détection, triage, hunting) est dans [packages/privasoc/README.md](packages/privasoc/README.md) ; celui de la passerelle dans [packages/gateway/README.md](packages/gateway/README.md). Déploiement Docker : [deploy/README.md](deploy/README.md).
+The full privasoc guide (onboarding a source, parsers, detection, triage, hunting) is in [packages/privasoc/README.md](packages/privasoc/README.md); the gateway's in [packages/gateway/README.md](packages/gateway/README.md). Docker deployment: [deploy/README.md](deploy/README.md) (in French).
 
-### Mesurer le triage
+### Measuring the triage
 
 ```bash
 cd packages/privasoc
-uv run privasoc eval triage --set all --runs 3     # modèle local
+uv run privasoc eval triage --set all --runs 3     # local model
 uv run privasoc eval triage-report                 # reports/triage.md
 ```
 
-Protocole et seuils, fixés avant tout résultat : [docs/DECISIONS.md](docs/DECISIONS.md) (PD23) et le journal historique de privasoc (D57).
+Protocol and thresholds, fixed before any result: [docs/DECISIONS.md](docs/DECISIONS.md) (PD23) and privasoc's historical log (D57).
 
 ### Tests
 
 ```bash
 uv run ruff check .
-(cd packages/privasoc && uv run pytest -q)       # les tests Vector sont ignorés sans le binaire
+(cd packages/privasoc && uv run pytest -q)       # Vector tests are skipped without the binary
 (cd packages/gateway && uv run pytest -q)
 uv run pytest -q integration
 ```
 
 ## Documentation
 
-| Fichier | Contenu |
+The design documents are in French.
+
+| File | Content |
 |---|---|
-| [docs/PROGRESS.md](docs/PROGRESS.md) | ce qui est fait, comment le vérifier, prochaines actions |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | journal des décisions (PD), constats (N), questions ouvertes (Q) |
-| [docs/INTEGRATION_PLAN.md](docs/INTEGRATION_PLAN.md) | plan en 11 phases et suivi |
-| [docs/CONTEXT.md](docs/CONTEXT.md) | fonctionnement des deux paquets |
-| [docs/alternatives.md](docs/alternatives.md) | pourquoi pas un simple seuil de confiance |
-| [docs/metrics.md](docs/metrics.md) | calibration, règle de coût, métriques, protocole d'évaluation |
-| [docs/constraints.md](docs/constraints.md) | sécurité, vie privée et droit, exploitation |
-| [docs/feasibility.md](docs/feasibility.md) | analyse d'intégration initiale |
-| [docs/MANUAL_SAMPLES.md](docs/MANUAL_SAMPLES.md) | essais d'ingestion sur des samples publics |
-| [diagram/diagram-notes.md](diagram/diagram-notes.md) | notes des diagrammes (v3 actuelle, v1 et v2 historiques) |
-| [packages/privasoc/docs/DECISIONS.md](packages/privasoc/docs/DECISIONS.md) | journal historique de privasoc (D1 à D62, I1 à I48), figé |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | what is done, how to check it, next actions |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | decision log (PD), findings (N), open questions (Q) |
+| [docs/INTEGRATION_PLAN.md](docs/INTEGRATION_PLAN.md) | 11-phase plan and tracking |
+| [docs/CONTEXT.md](docs/CONTEXT.md) | how the two packages work |
+| [docs/alternatives.md](docs/alternatives.md) | why not a simple confidence threshold |
+| [docs/metrics.md](docs/metrics.md) | calibration, cost rule, metrics, evaluation protocol |
+| [docs/constraints.md](docs/constraints.md) | security, privacy and law, operations |
+| [docs/feasibility.md](docs/feasibility.md) | initial integration analysis |
+| [docs/MANUAL_SAMPLES.md](docs/MANUAL_SAMPLES.md) | ingestion trials on public samples |
+| [diagram/diagram-notes.md](diagram/diagram-notes.md) | diagram notes (current v3, historical v1 and v2) |
+| [packages/privasoc/docs/DECISIONS.md](packages/privasoc/docs/DECISIONS.md) | privasoc's historical log (D1 to D62, I1 to I48), frozen, in English |
 
-## Limites connues
+## Known limits
 
-- La confiance déclarée par un modèle 8B est surconfiante et manipulable par injection ; elle ne sert pas seule à router ([metrics.md](docs/metrics.md)).
-- Les preuves de triage ne contiennent que les événements qui ont déclenché la règle, et les noms de domaine et d'utilisateur pseudonymisés masquent ce qui les rendait suspects (constat N27) : c'est l'objet des phases P2 et P5.
-- Un serveur de modèle inconnu sur le réseau local reste un composant de confiance (N28).
-- Des logs pseudonymisés restent des données personnelles : prérequis juridiques avant tout usage sur des données de tiers ([constraints.md](docs/constraints.md)). Rien ici n'est un avis juridique.
+- The confidence an 8B model reports is overconfident and can be manipulated by injection; it never routes on its own ([metrics.md](docs/metrics.md)).
+- Triage evidence only holds the events that matched the rule, and pseudonymised domain and user names hide what made them suspicious (finding N27): phases P2 and P5 address this.
+- An unknown model server on the local network is still a trusted component (N28).
+- Pseudonymised logs are still personal data: legal prerequisites apply before any use on third-party data ([constraints.md](docs/constraints.md)). Nothing here is legal advice.
 
 ## Licence
 
-MIT, voir [LICENSE](LICENSE). Le modèle NER par défaut de la passerelle, `urchade/gliner_multi_pii-v1`, est sous Apache-2.0 ; les règles SigmaHQ (DRL 1.1) et les fixtures Elastic (ELv2) sont téléchargées à l'exécution et jamais committées.
+MIT, see [LICENSE](LICENSE). The gateway's default NER model, `urchade/gliner_multi_pii-v1`, is Apache-2.0; SigmaHQ rules (DRL 1.1) and Elastic fixtures (ELv2) are downloaded at run time and never committed.
