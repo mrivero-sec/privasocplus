@@ -21,6 +21,29 @@ Assistants IA : commencez par [AGENTS.md](AGENTS.md).
 
 Le triage distant reste une action humaine : rien n'escalade automatiquement. Détail et reprise : [docs/PROGRESS.md](docs/PROGRESS.md).
 
+## Environnement de test
+
+privasoc+ est développé et exploité sur un petit lab multi-site, pas seulement sur des fichiers d'exemple :
+
+```mermaid
+flowchart LR
+  subgraph site[Site local]
+    FW[Pare-feu] --- PVE[Proxmox VE]
+    PVE --> LXC[Conteneurs LXC<br/>appliances Docker]
+    PVE --> DNS[DNS Pi-hole]
+    GPU[Poste GPU<br/>LLM local]
+    SOC[privasoc]
+  end
+  VPS[Nœuds VPS] <-->|maillage WireGuard<br/>Headscale auto-hébergé| site
+  FW & DNS & LXC & VPS -->|syslog| SOC
+  SOC <-->|prompts pseudonymisés| GPU
+```
+
+- **Réseau hybride** : serveurs locaux et VPS reliés par un maillage WireGuard piloté par un Headscale auto-hébergé (compatible Tailscale) ; aucune interface d'administration exposée sur Internet.
+- **Virtualisation** : Proxmox VE, conteneurs LXC non privilégiés et appliances sous Docker ; automatisation par jetons d'API au moindre privilège.
+- **Sources de logs** : le pare-feu périmétrique, le DNS Pi-hole, des serveurs SSH et web alimentent privasoc aujourd'hui ; la collecte Proxmox et Windows est prévue (étape 8 de privasoc).
+- **Pourquoi c'est utile** : des formats de logs réels et hétérogènes éprouvent la génération de parseurs ; les vraies alertes clôturées par l'analyste servent de vérité terrain à l'évaluation du triage. Les logs réels ne quittent jamais le lab et ne sont jamais committés.
+
 ## Architecture
 
 ![Architecture v3](diagram/architecture-v3.png)

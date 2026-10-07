@@ -21,6 +21,29 @@ AI assistants: start with [AGENTS.md](AGENTS.md) (in French).
 
 Remote triage stays a human action: nothing escalates automatically. Details and hand-over: [docs/PROGRESS.md](docs/PROGRESS.md) (in French).
 
+## Lab environment
+
+privasoc+ is developed and run against a small multi-site lab rather than sample files alone:
+
+```mermaid
+flowchart LR
+  subgraph site[On-premises site]
+    FW[Firewall] --- PVE[Proxmox VE]
+    PVE --> LXC[LXC containers<br/>Docker appliances]
+    PVE --> DNS[Pi-hole DNS]
+    GPU[GPU workstation<br/>local LLM]
+    SOC[privasoc]
+  end
+  VPS[VPS nodes] <-->|WireGuard mesh<br/>self-hosted Headscale| site
+  FW & DNS & LXC & VPS -->|syslog| SOC
+  SOC <-->|pseudonymised prompts| GPU
+```
+
+- **Hybrid network**: on-premises servers and VPS nodes joined by a WireGuard mesh with a self-hosted Headscale control plane (Tailscale-compatible); no admin interface is exposed to the Internet.
+- **Virtualisation**: Proxmox VE with unprivileged LXC containers and Docker-based appliances; automation through API tokens with least privilege.
+- **Log sources**: the perimeter firewall, Pi-hole DNS, SSH and web servers feed privasoc today; Proxmox and Windows collection is planned (privasoc step 8).
+- **Why it matters**: real, heterogeneous log formats exercise the parser generation; real alerts closed by the analyst become ground truth for the triage evaluation. Real logs never leave the lab and are never committed.
+
 ## Architecture
 
 ![Architecture v3](diagram/architecture-v3.png)
