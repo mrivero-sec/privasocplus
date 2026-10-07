@@ -49,9 +49,7 @@ def composition(tmp_path):
         if frontier:
             args += ["-f", str(DEPLOY / "compose.frontier.yml")]
         args += ["config", "--format", "json"]
-        result = subprocess.run(
-            args, env=env, capture_output=True, text=True, check=False
-        )
+        result = subprocess.run(args, env=env, capture_output=True, text=True, check=False)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
@@ -94,6 +92,4 @@ def test_frontier_uses_ner_and_the_same_effective_model(composition):
         remote["SOVGATE_EXTERNAL_MODEL"]
         == services["privasoc"]["environment"]["PRIVASOC_LLM_REMOTE_MODEL"]
     )
-    assert (
-        services["privasoc"]["depends_on"]["sovgate"]["condition"] == "service_healthy"
-    )
+    assert services["privasoc"]["depends_on"]["sovgate"]["condition"] == "service_healthy"

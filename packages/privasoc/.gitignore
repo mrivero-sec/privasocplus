@@ -1,0 +1,24 @@
+# secrets and personal data: never committed (D37, D41)
+.env
+data/*
+!data/.gitkeep
+*.db
+*.db-*
+# (the vault itself is data/vault.db, covered above; do not ignore vault.py)
+# French working copy of the decision log
+docs/*.fr.md
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# generated from approved parsers (privasoc serve / vector-config)
+vector/pipeline.yaml
+*.cache.json
+
+# Public raw samples for manual import only; never tracked or watched by Vector.
+data/samples-manual/

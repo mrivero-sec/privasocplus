@@ -1,0 +1,62 @@
+# Gateway policy: what is sensitive, and what happens to it.
+#
+# Sensitivity levels: public < confidential < restricted
+# Actions:            passthrough | pseudonymise | local | block
+
+upstreams:
+  external:                      # third-party provider (OpenAI-compatible API)
+    base_url: https://api.openai.com/v1
+    model: gpt-4o-mini
+    api_key_env: EXTERNAL_API_KEY
+  local:                         # self-hosted model, data never leaves the perimeter
+    base_url: http://ollama:11434/v1
+    model: llama3.1:8b
+
+entities:
+  AHV_NUMBER: restricted         # Swiss social security number
+  IBAN: restricted
+  CREDIT_CARD: restricted
+  DATE_OF_BIRTH: confidential
+  EMAIL: confidential
+  PHONE_CH: confidential
+  PERSON: confidential
+  ORG: confidential
+  ADDRESS: confidential
+  CLIENT: confidential           # from the dictionary below
+  LOCATION: public
+
+default_entity_sensitivity: confidential
+
+actions:
+  public: passthrough
+  confidential: pseudonymise
+  restricted: local
+
+# Same value -> same pseudonym within: global | tenant | session.
+# `tenant` stops the provider from linking a person across organisations.
+pseudonym_scope: tenant
+
+# System prompts are authored by the application; set to true if yours contain personal data.
+pseudonymise_system: false
+
+# If a detector crashes: closed = refuse the request, open = forward unprotected (audited).
+fail_mode: closed
+
+# Free-text entities (names, organisations, addresses): none | gliner | presidio
+ner:
+  backend: none                  # set to gliner after `pip install .[ner]`
+  model: urchade/gliner_multi_pii-v1
+  threshold: 0.3                 # chosen from evals/benchmark.py (leak vs precision)
+
+injection:
+  enabled: true
+  spotlight: true                # wrap untrusted content in random per-request boundaries
+  on_detect: strip_tools         # flag | strip_tools | block
+  untrusted_roles: [tool]
+  untrusted_tags: [document, context, retrieved, search_result]
+
+# Known sensitive terms (exact match, case-insensitive)
+dictionary:
+  CLIENT:
+    - Muster Holding AG
+    - Projekt Matterhorn

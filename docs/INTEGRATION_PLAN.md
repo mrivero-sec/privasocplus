@@ -17,13 +17,13 @@ Chaque phase a un objectif, des travaux (dépôt et fichiers concernés), un cri
 
 | Élément | Emplacement |
 |---|---|
-| Module d'escalade, enrichissement, signaux, fiche de faits, routage | dépôt `privasoc`, nouveau paquet `src/privasoc/escalate/` (`context.py`, `signals.py`, `claims.py`, `factsheet.py`, `router.py`, `audit_sampling.py`), orchestré par `service.triage_alert` |
-| Banc de triage (étape 8 de privasoc) | dépôt `privasoc`, `evaluation/triage/` et commande `privasoc eval triage` |
-| Profil « privasoc » de la passerelle | dépôt `sovereign-llm-gateway`, `config/policy.privasoc.yaml`, détecteurs vérificateurs dans `src/sovgate/pii/detectors.py`, allowlist dans `pipeline.py` |
-| Conception, décisions, plan, diagrammes | ce dossier `privasoc+` |
-| Composition des services (Docker Compose, réseaux internes, accès loopback) | ce dossier, `deploy/` ; distant activé explicitement par une variante |
+| Module d'escalade, enrichissement, signaux, fiche de faits, routage | `packages/privasoc`, nouveau sous-paquet `src/privasoc/escalate/` (`context.py`, `signals.py`, `claims.py`, `factsheet.py`, `router.py`, `audit_sampling.py`), orchestré par `service.triage_alert` |
+| Banc de triage (étape 8 de privasoc) | `packages/privasoc`, `bench_triage.py`, `eval_triage.py`, commande `privasoc eval triage` |
+| Profil « privasoc » de la passerelle | `packages/gateway`, `config/policy.privasoc.yaml`, détecteurs vérificateurs dans `src/sovgate/pii/detectors.py`, allowlist dans `pipeline.py` |
+| Conception, décisions, plan, diagrammes | `docs/`, `diagram/` |
+| Composition des services (Docker Compose, réseaux internes, accès loopback) | `deploy/` ; distant activé explicitement par une variante |
 
-Les deux dépôts restent indépendants et publiables séparément (PD3).
+~~Les deux dépôts restent indépendants et publiables séparément (PD3).~~ Un seul dépôt, deux paquets dans un workspace uv (PD29).
 
 ## 2. Tableau de suivi
 
@@ -250,9 +250,9 @@ vérifiées, mais la normalisation reste limitée à 13 lignes sur 6 111. Examin
 six échecs de parseurs locaux avant de retester la détection. Ce jeu non étiqueté
 ne clôture pas P0 et ne justifie aucun go / no-go sur le triage distant.
 
-Reprise N36 : 2 030 �v�nements normalis�s et 4 081 lignes en quarantaine. Revoir
+Reprise N36 : 2 030 événements normalisés et 4 081 lignes en quarantaine. Revoir
 Linux 93602e98 avant activation explicite D23, puis corriger SSH, iptables et
-Check Point. Les parseurs fixes Apache sont d�ploy�s ; aucun nouvel import n�cessaire.
+Check Point. Les parseurs fixes Apache sont déployés ; aucun nouvel import nécessaire.
 
 Préférence opérateur N38 : Linux reste en revue. Nouveau candidat 90198064 avec
 extraction enrichie, vérifié sur 2 000 lignes ; revoir sa qualité avant toute

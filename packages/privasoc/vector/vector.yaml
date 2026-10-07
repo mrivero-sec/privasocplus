@@ -1,0 +1,36 @@
+# privasoc collector (D9, D26, D30).
+# Source-agnostic inputs: raw lines are kept verbatim (codec bytes), never pre-parsed,
+# because the whole point is to learn formats we do not know yet.
+data_dir: ${VECTOR_DATA_DIR:-/var/lib/vector}
+
+sources:
+  syslog_udp:
+    type: socket
+    mode: udp
+    address: ${PRIVASOC_SYSLOG_ADDR:-0.0.0.0:5514}
+    decoding: { codec: bytes }
+  syslog_tcp:
+    type: socket
+    mode: tcp
+    address: ${PRIVASOC_SYSLOG_ADDR:-0.0.0.0:5514}
+    decoding: { codec: bytes }
+    framing: { method: newline_delimited }
+  inbox:
+    type: file
+    include: ['${PRIVASOC_INBOX:-/inbox}/**/*.log']  # single quotes: Windows paths contain backslashes
+    read_from: beginning
+
+transforms:
+  tag_source:
+    type: remap
+    inputs: [syslog_udp, syslog_tcp, inbox]
+    source: |
+      # A source is identified by its input and its sender (or file name).
+      if exists(.file) {
+        parts = split(string!(.file), "/")
+        .privasoc_source = "file:" + string!(parts[-1])
+      } else {
+        .privasoc_source = "syslog:" + (string(.host) ?? "unknown")
+      }
+
+# Routing, approved parsers and the sink live in pipeline.yaml (generated).

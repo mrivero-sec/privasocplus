@@ -1,0 +1,73 @@
+# Profile for privasoc (privasoc+): the client pseudonymises, the gateway verifies.
+#
+# privasoc already replaces users, hosts, domains, e-mails, IPs and MACs with
+# shape-preserving tokens before anything reaches this gateway. Pseudonymising
+# them a second time would break re-identification and the shape privasoc's
+# parsers depend on. So this profile:
+#   * leaves privasoc tokens alone (allowlist_patterns);
+#   * refuses the request when an address outside privasoc's token ranges is
+#     present (UNMAPPED_IP / UNMAPPED_MAC are restricted, restricted = block):
+#     privasoc missed a value and must learn a rule, not hide the leak;
+#   * switches off detectors that misfire on log data (Luhn on millisecond
+#     timestamps and SIDs, Swiss phone and AHV patterns on numeric fields);
+#   * still pseudonymises residual free-text names found by the NER backend;
+#   * flags, spotlights and audits prompt injection in the evidence, which
+#     privasoc sends inside <document> tags (log fields are attacker-controlled).
+
+upstreams:
+  external:
+    base_url: https://api.openai.com/v1
+    model: gpt-4o-mini
+    api_key_env: EXTERNAL_API_KEY
+  local:                         # unused by this profile (restricted = block)
+    base_url: http://127.0.0.1:11434/v1
+    model: unused
+
+entities:
+  UNMAPPED_IP: restricted
+  UNMAPPED_MAC: restricted
+  IBAN: restricted
+  EMAIL: confidential
+  PERSON: confidential
+  ORG: confidential
+  ADDRESS: confidential
+  DATE_OF_BIRTH: confidential
+  LOCATION: public
+
+default_entity_sensitivity: confidential
+
+actions:
+  public: passthrough
+  confidential: pseudonymise
+  restricted: block              # never `local`: privasoc keeps its local verdict instead
+
+disabled_patterns: [CREDIT_CARD, PHONE_CH, AHV_NUMBER]
+
+allowlist_patterns:
+  - '\b(?:user|host)-[0-9a-f]{6}\b'                       # user and host tokens
+  - '\bu[0-9a-f]{6}@(?:d[0-9a-f]{6}\.)+[A-Za-z]{2,24}\b'  # e-mail tokens
+  - '\b(?:d[0-9a-f]{6}\.)+[A-Za-z]{2,24}\b'               # domain tokens
+  - '\bS-1-5-21-\d+-\d+-\d+(?:-\d+)?\b'                   # SIDs (privasoc keys the domain part)
+
+verifier:
+  require_address_manifest: true  # only minted tokens from the authenticated client
+  unmapped_ip: true
+  unmapped_mac: true
+
+pseudonym_scope: session         # scopes gateway tokens only; privasoc tokens remain linkable
+pseudonymise_system: false
+fail_mode: closed
+
+ner:
+  backend: none                  # gliner recommended in production (`pip install .[ner]`)
+  model: urchade/gliner_multi_pii-v1
+  threshold: 0.3
+
+injection:
+  enabled: true
+  spotlight: true
+  on_detect: flag                # triage has no tools; privasoc sends flagged alerts to the analyst
+  untrusted_roles: [tool]
+  untrusted_tags: [document]
+
+dictionary: {}

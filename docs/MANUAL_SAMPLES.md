@@ -65,8 +65,7 @@ comme des lignes de logs, sans enveloppe JSON à retirer.
 
 Essai supplémentaire sur les six sources inconnues : `qwen3:8b` local, mode structuré,
 au plus deux tentatives par source, repli distant désactivé. Les six résultats sont
-
-eeds_escalation`, aucun nouveau parseur proposé ou activé. Les rapports détaillés
+`needs_escalation`, aucun nouveau parseur proposé ou activé. Les rapports détaillés
 restent dans le dossier ignoré : `ingestion-report.json`, `state-report.json` et
 `parser-test-report.json`. Les nombres de lignes et les états de parseurs ne sont pas
 une mesure d’exactitude ; ce corpus n’a pas de vérité terrain d’attaque.

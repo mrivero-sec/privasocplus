@@ -1,6 +1,6 @@
 # Tests d'intégration privasoc + sovgate
 
-Vérifient le contrat entre les deux dépôts (DECISIONS PD5, PD8, PD9, PD20) avec du vrai code des deux côtés et un faux modèle frontière. Aucune clé API, aucun réseau externe.
+Vérifient le contrat entre les deux paquets (DECISIONS PD5, PD8, PD9, PD20) avec du vrai code des deux côtés et un faux modèle frontière. Aucune clé API, aucun réseau externe.
 
 | Test | Vérifie |
 |---|---|
@@ -12,15 +12,14 @@ Vérifient le contrat entre les deux dépôts (DECISIONS PD5, PD8, PD9, PD20) av
 
 ## Lancer
 
-Depuis ce dossier, avec les deux dépôts installés dans un même environnement (Python 3.11 ou plus) :
+Depuis la racine du dépôt :
 
 ```bash
-uv venv .venv-plus -p 3.12
-uv pip install -p .venv-plus/bin/python <chemin>/privasoc "<chemin>/sovereign-llm-gateway[dev]" uvicorn pytest
-SOVGATE_DIR=<chemin>/sovereign-llm-gateway .venv-plus/bin/pytest -q -p no:cacheprovider integration
+uv sync --all-packages
+uv run pytest -q integration
 ```
 
-`SOVGATE_DIR` sert à trouver `config/policy.privasoc.yaml`. Les installations ne sont pas éditables : réinstaller après chaque changement dans un dépôt.
+Le profil est lu dans `packages/gateway/config/policy.privasoc.yaml` (`SOVGATE_DIR` permet d'en désigner un autre).
 
 Le profil strict exige une clé de client et un manifeste `_privasoc_address_tokens` issu
 du coffre local. Il est retiré avant l'amont. Les huit tests utilisent uniquement un
@@ -31,7 +30,6 @@ démarrer de conteneur : activation explicite du distant, séparation des résea
 secrets, NER et modèle effectif cohérents. Aucun `.env` réel n'est lu. Si le client Docker
 est absent, seuls ces trois contrôles sont ignorés. Résultat de la revue : 11 passants.
 
-Sous Windows, utiliser `.venv-plus/Scripts/python.exe` et définir `SOVGATE_DIR` dans
-l'environnement avant de lancer `python -B -m pytest -q -p no:cacheprovider integration`.
+Sous Windows, la même commande `uv run pytest -q integration` fonctionne depuis la racine.
 Si le dossier temporaire système est inaccessible, choisir `--basetemp` dans un dossier
 de travail dédié. La communication loopback doit être autorisée.

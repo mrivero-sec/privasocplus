@@ -1,6 +1,6 @@
-# privasoc+ : contexte des deux projets sources
+# privasoc+ : contexte des deux paquets
 
-Ce dossier ne contient pas le code des deux projets. Ce résumé suffit pour comprendre la conception ; pour modifier le code, il faut les deux dépôts séparés `privasoc` et `sovereign-llm-gateway`. État des dépôts au 2026-10-07.
+Depuis PD29, le code des deux anciens dépôts vit dans ce dépôt : `packages/privasoc` (ci-dessous « privasoc ») et `packages/gateway` (ci-dessous « sovgate »). Ce résumé suffit pour comprendre la conception. Les identifiants D et I renvoient au journal historique figé `packages/privasoc/docs/DECISIONS.md` ; toute nouvelle décision va dans `docs/DECISIONS.md`. État au 2026-10-07.
 
 ## privasoc
 

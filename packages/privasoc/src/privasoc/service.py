@@ -1,0 +1,855 @@
+"""Actions shared by the command line and the web UI (step 4).
+
+Each function takes the store and the settings, does one human decision or one job, and
+returns a plain dict. Front-ends only format the result, so the CLI and the UI can never
+drift apart on what "approve" means.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from privasoc import onboarding, vectorgen
+from privasoc.config import Settings
+from privasoc.pseudo import Pseudonymizer, Vault
+from privasoc.sandbox import Sandbox
+from privasoc.store import Store
+
+
+class ActionError(Exception):
+    """A decision that cannot be applied (unknown id, wrong state, Vector refused...)."""
+
+
+def _vector_errors(fn):
+    """A missing or broken Vector binary is an operator problem, not a crash."""
+    import functools
+    import subprocess
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ActionError(f"Vector could not run ({exc}); check PRIVASOC_VECTOR_BIN") from exc
+
+    return wrapper
+
+
+def pseudonymizer(s: Settings) -> Pseudonymizer:
+    s.require_secrets()
+    vault = Vault(
+        s.vault_path,
+        s.hmac_key.get_secret_value().encode(),
+        s.vault_key.get_secret_value().encode(),
+    )
+    return Pseudonymizer(vault)
+
+
+# ---------------------------------------------------------------------- hosts (D45, D47)
+
+
+def _host(store: Store, source: str) -> dict:
+    h = store.host(source)
+    if not h:
+        raise ActionError(f"unknown host {source!r}")
+    return h
+
+
+@_vector_errors
+def approve_host(store: Store, s: Settings, source: str) -> dict:
+    """Known format: ingested at once. Unknown: lines stay in quarantine for `propose`."""
+    from privasoc.detect import alerts as al
+
+    _host(store, source)
+    out = onboarding.approve_host(store, s, Sandbox(s.vector_bin), source)
+    al.resolve(store, "host", "new_sender", source)
+    return out
+
+
+def reject_host(store: Store, source: str) -> dict:
+    from privasoc.detect import alerts as al
+
+    _host(store, source)
+    store.set_host(source, "rejected")
+    al.resolve(store, "host", "new_sender", source)
+    return {"source": source, "status": "rejected"}
+
+
+def set_thresholds(store: Store, source: str, values: dict[str, str | float]) -> dict:
+    """Per-host health overrides; an empty value removes the override."""
+    from privasoc.health import DEFAULTS
+
+    th = dict(_host(store, source)["thresholds"])
+    for k, v in values.items():
+        if k not in DEFAULTS:
+            raise ActionError(f"unknown threshold {k!r}; known: {sorted(DEFAULTS)}")
+        if v in ("", None):
+            th.pop(k, None)
+            continue
+        try:
+            num = float(v)
+        except ValueError as exc:
+            raise ActionError(f"{k}: {v!r} is not a number") from exc
+        if num < 0:
+            raise ActionError(f"{k}: must be positive")
+        th[k] = num
+    store.set_host(source, thresholds=th)
+    return th
+
+
+def host_health(store: Store, host: dict) -> dict:
+    """Current health (D47), recorded in the history when it changes."""
+    from privasoc import health
+
+    hs = health.compute(store, host)
+    store.record_health(host["source"], hs["status"], hs["reasons"])
+    return hs
+
+
+# ---------------------------------------------------------------------- parsers (D23)
+
+
+@_vector_errors
+def set_parser_status(store: Store, s: Settings, parser_id: str, status: str) -> dict:
+    """Approve or reject a parser. Vector's config is regenerated and validated; if Vector
+    refuses it, everything is rolled back. An approval backfills the quarantine (D45)."""
+    p = store.parser(parser_id)
+    if not p:
+        raise ActionError(f"unknown parser {parser_id!r}")
+    if status == "approved" and p["status"] != "proposed":
+        raise ActionError(f"only a proposed parser can be approved (is {p['status']})")
+    if status == "rejected" and p["status"] not in {"proposed", "approved"}:
+        raise ActionError(f"parser is already {p['status']}")
+    previous = p["status"]
+    active = [x["id"] for x in store.parsers("approved") if x["source"] == p["source"]]
+    store.set_parser_status(parser_id, status)
+    path = vectorgen.write(store.parsers("approved"), s.vector_dir)
+    error = vectorgen.validate(s.vector_bin, s.vector_dir)
+    if error:  # never leave Vector with a config it cannot load
+        # Vector refusing the new parser is the parser's fault; Vector not running is not.
+        refused = status == "approved" and not error.startswith("cannot run ")
+        store.set_parser_status(parser_id, "rejected" if refused else previous)
+        for pid in active:  # restore the parser that was active before
+            store.set_parser_status(pid, "approved")
+        vectorgen.write(store.parsers("approved"), s.vector_dir)
+        raise ActionError(f"Vector configuration not applied, rolled back:\n{error[:2000]}")
+    out: dict = {"id": parser_id, "status": status, "config": str(path)}
+    if status == "approved":
+        out.update(
+            onboarding.after_parser_approval(store, Sandbox(s.vector_bin), store.parser(parser_id))
+        )
+    return out
+
+
+@_vector_errors
+def try_parser(store: Store, s: Settings, parser_id: str, limit: int = 20) -> list[dict]:
+    """Run a parser now on the latest quarantined lines of its source (local display only):
+    the reviewer sees what it would do on today's logs, not only on the generation sample."""
+    p = store.parser(parser_id)
+    if not p or not p["vrl"]:
+        raise ActionError(f"parser {parser_id!r} has no program")
+    lines = store.quarantine_sample(p["source"], limit)
+    if not lines:
+        return []
+    res = Sandbox(s.vector_bin).run(p["vrl"], lines)
+    if res.compile_error:
+        raise ActionError(f"does not compile: {res.compile_error[:500]}")
+    return [
+        {"raw": raw, "ecs": r.output, "error": r.error}
+        for raw, r in zip(lines, res.lines, strict=True)
+    ]
+
+
+def _endpoint(s: Settings, provider: str, session: str | None = None):
+    """`session` names the call for an egress gateway (privasoc+): never a real value."""
+    import uuid
+
+    from privasoc.llm import Endpoint
+
+    if provider == "remote":
+        headers = (
+            ("X-Tenant-Id", s.llm_remote_tenant),
+            ("X-Session-Id", session or f"privasoc-{uuid.uuid4().hex[:12]}"),
+        )
+        return Endpoint(
+            "remote",
+            s.llm_remote_url,
+            s.llm_remote_model,
+            s.llm_remote_api_key.get_secret_value(),
+            headers=headers,
+        )
+    return Endpoint("local", s.llm_local_url, s.llm_local_model, think=s.llm_local_think)
+
+
+def _generate(store, s, source, provider, lines, mode, say):
+    from privasoc.generator import generate
+    from privasoc.llm import LLMClient
+
+    if provider == "remote" and not s.llm_remote_url:
+        raise ActionError("no remote API configured (PRIVASOC_LLM_REMOTE_URL)")
+    llm = LLMClient(
+        _endpoint(s, provider),
+        call_log=store.log_llm_call,
+        timeout=s.llm_timeout,
+        max_tokens=s.llm_max_tokens,
+        num_ctx=s.llm_num_ctx,
+    )
+    sandbox = Sandbox(s.vector_bin)
+    try:  # fail fast, before minutes of LLM time
+        say(f"sandbox: {sandbox.check()}")
+        llm.check()
+    except RuntimeError as exc:
+        raise ActionError(str(exc)) from exc
+    pz = pseudonymizer(s)
+    if provider == "remote" and s.remote_residual_pass:
+        # Step 5: the local model first looks for what the detectors missed. Its findings
+        # are applied to this call at once and kept as proposals for a human to review.
+        extra = _local_residual_rules(store, s, lines, say)
+        pz = pz.with_rules(extra)
+    from privasoc.llm import GatewayRefused
+
+    llm.token_provider = pz.vault.address_tokens_in
+    try:
+        return generate(
+            source,
+            lines,
+            llm,
+            pz,
+            sandbox,
+            k=s.sample_size,
+            max_attempts=s.max_attempts,
+            progress=say,
+            mode=mode,
+            min_coverage=s.min_coverage,
+        )
+    except GatewayRefused as exc:  # privasoc+ PD8: nothing reached the provider
+        raise ActionError(str(exc)) from exc
+
+
+def propose(
+    store: Store,
+    s: Settings,
+    source: str,
+    provider: str = "local",
+    mode: str | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> dict:
+    """Ask the LLM for a parser of a quarantined source (pseudonymised samples only)."""
+    say = progress or (lambda _msg: None)
+    mode = mode or s.parser_mode
+    if mode not in {"structured", "vrl"}:
+        raise ActionError("mode must be structured or vrl")
+    if provider not in {"local", "remote"}:
+        raise ActionError("provider must be local or remote")
+    host = store.host(source)
+    if host and host["status"] != "approved":
+        raise ActionError(f"{source!r} is {host['status']}: approve the host first")
+    lines = store.quarantine_lines(source)
+    if not lines:
+        raise ActionError(f"no quarantined lines for {source!r}")
+    say(f"{len(lines)} lines, asking {provider} model...")
+    out = _generate(store, s, source, provider, lines, mode, say)
+    if out.status == "needs_escalation" and provider == "local":
+        if s.auto_fallback and s.llm_remote_url:
+            say(f"local model: {out.reason}; falling back to remote API (pseudonymised)")
+            store.save_parser(
+                out.parser_id, source, "failed", out.provider, out.model, out.vrl, out.report()
+            )
+            out = _generate(store, s, source, "remote", lines, mode, say)
+        else:
+            say(
+                f"local model: {out.reason}. Retry with the remote provider if you accept "
+                "sending pseudonymised samples to the API."
+            )
+    store.save_parser(
+        out.parser_id, source, out.status, out.provider, out.model, out.vrl, out.report()
+    )
+    return {
+        "parser_id": out.parser_id,
+        "status": out.status,
+        "reason": out.reason,
+        "metrics": out.metrics,
+    }
+
+
+# ---------------------------------------------------------------------- learned pseudonymisation
+# (step 5, D25, D33)
+
+
+def _local_llm(store: Store, s: Settings):
+    import dataclasses
+
+    from privasoc.llm import LLMClient
+    from privasoc.pseudo.learn import LocalOnlyError, ensure_local
+
+    if not s.llm_local_model:
+        raise ActionError("no local model configured (PRIVASOC_LLM_LOCAL_MODEL)")
+    try:
+        ensure_local(s.llm_local_url, not_like=(s.llm_remote_url,))
+    except LocalOnlyError as exc:
+        raise ActionError(str(exc)) from exc
+    llm = LLMClient(
+        dataclasses.replace(_endpoint(s, "local"), think=s.learn_think),
+        call_log=store.log_llm_call,
+        timeout=s.llm_timeout,
+        max_tokens=s.learn_max_tokens,
+        num_ctx=s.llm_num_ctx,
+    )
+    try:
+        llm.check()
+    except RuntimeError as exc:
+        raise ActionError(str(exc)) from exc
+    if llm.gateway:
+        raise ActionError(
+            "PRIVASOC_LLM_LOCAL_URL answers as an egress gateway (sovgate); the residual pass "
+            "sends clear-text lines and must talk to the local model directly"
+        )
+    return llm
+
+
+def _learn(store: Store, s: Settings, lines: list[str], say, origin: str = "llm") -> list[dict]:
+    import httpx
+
+    from privasoc.pseudo import learn
+    from privasoc.sampling import stratified_sample
+
+    llm = _local_llm(store, s)
+    pz = pseudonymizer(s)
+    try:
+        idx, _ = stratified_sample(lines, s.learn_sample)
+        sample = [lines[i] for i in sorted(idx)]
+        say(f"{len(sample)} lines (one per template first) shown to the local model")
+        try:
+            findings = learn.residual_pass(llm, pz, sample, batch=s.learn_batch, progress=say)
+        except httpx.HTTPError as exc:
+            raise ActionError(f"local model error: {exc}") from exc
+        out = []
+        for rule in learn.to_rules(findings, origin):
+            new = pz.vault.add_rule(rule)
+            stored = pz.vault.rule(rule.id)
+            eff = learn.preview(pz, rule, lines, examples=0)
+            out.append(
+                {
+                    "id": rule.id,
+                    "label": rule.label(),
+                    "kind": rule.kind,
+                    "new": new,
+                    "status": stored.status if stored else rule.status,
+                    "changed": eff["changed"],
+                    "rule": rule,
+                }
+            )
+        return out
+    finally:
+        pz.vault.close()
+
+
+def _local_residual_rules(store: Store, s: Settings, lines: list[str], say) -> list:
+    """Rules to apply to one remote call: new proposals plus earlier proposals that are
+    still waiting (never the rejected ones)."""
+    try:
+        found = _learn(store, s, lines, say, origin="llm")
+    except ActionError as exc:
+        raise ActionError(
+            f"local residual pass unavailable ({exc}). The remote API is only called after "
+            "the local model has checked the samples; set PRIVASOC_REMOTE_RESIDUAL_PASS=false "
+            "to rely on the regex detectors alone."
+        ) from exc
+    extra = [f["rule"] for f in found if f["status"] == "proposed"]
+    say(f"local residual pass: {len(extra)} extra rule(s) applied to this remote call")
+    return extra
+
+
+def learn_rules(
+    store: Store, s: Settings, source: str, progress: Callable[[str], None] | None = None
+) -> list[dict]:
+    """Ask the local model what the current rules miss in a source's latest lines."""
+    say = progress or (lambda _m: None)
+    host = store.host(source)
+    if not host:
+        raise ActionError(f"unknown host {source!r}")
+    if host["status"] != "approved":
+        raise ActionError(f"{source!r} is {host['status']}: its lines go to no model")
+    lines = store.recent_raw(source, 500)
+    if not lines:
+        raise ActionError(f"no line for {source!r} yet")
+    return [{k: v for k, v in f.items() if k != "rule"} for f in _learn(store, s, lines, say)]
+
+
+def list_rules(s: Settings, status: str | None = None) -> list:
+    pz = pseudonymizer(s)
+    try:
+        return pz.vault.rules(status)
+    finally:
+        pz.vault.close()
+
+
+def add_rule(s: Settings, rtype: str, kind: str, pattern: str, approve: bool = False):
+    from privasoc.pseudo.rules import Rule, RuleError, validate
+
+    try:
+        pattern = validate(rtype, kind, pattern)
+    except RuleError as exc:
+        raise ActionError(str(exc)) from exc
+    rule = Rule(rtype, kind, pattern, "approved" if approve else "proposed", "human")
+    pz = pseudonymizer(s)
+    try:
+        if not pz.vault.add_rule(rule):
+            raise ActionError(f"rule {rule.id} already exists ({pz.vault.rule(rule.id).status})")
+    finally:
+        pz.vault.close()
+    return rule
+
+
+def set_rule_status(s: Settings, rule_id: str, status: str):
+    if status not in {"approved", "rejected"}:
+        raise ActionError("status must be approved or rejected")
+    pz = pseudonymizer(s)
+    try:
+        rule = pz.vault.rule(rule_id)
+        if not rule:
+            raise ActionError(f"unknown rule {rule_id!r}")
+        if status == "approved":  # re-validate: the model's proposals are untrusted input
+            from privasoc.pseudo.rules import RuleError, validate
+
+            try:
+                validate(rule.rtype, rule.kind, rule.pattern)
+            except RuleError as exc:
+                raise ActionError(f"cannot approve: {exc}") from exc
+        pz.vault.set_rule_status(rule_id, status)
+        return pz.vault.rule(rule_id)
+    finally:
+        pz.vault.close()
+
+
+def rule_preview(store: Store, s: Settings, rule_id: str, source: str | None = None) -> dict:
+    """Effect of a rule on the latest real lines (all approved hosts, or one)."""
+    from privasoc.pseudo import learn
+
+    pz = pseudonymizer(s)
+    try:
+        rule = pz.vault.rule(rule_id)
+        if not rule:
+            raise ActionError(f"unknown rule {rule_id!r}")
+        # measured against the other approved rules, without this one
+        pz.rules = type(pz.rules)([r for r in pz.rules.rules if r.id != rule_id])
+        lines = store.recent_raw(source, 1000)
+        return {"rule": rule, **learn.preview(pz, rule, lines)}
+    finally:
+        pz.vault.close()
+
+
+# ---------------------------------------------------------------------- detection (step 6)
+
+SIGMA_TAG = "r2026-07-01"  # SigmaHQ release, pinned (D50)
+SIGMA_DIRS = (
+    "rules/network/dns",
+    "rules/network/firewall",
+    "rules/web/proxy_generic",
+    "rules/web/webserver_generic",
+    "rules/linux/builtin",
+)
+_ENGINE: dict = {}
+
+
+def engine(s: Settings, reload: bool = False):
+    """Every rule: privasoc's, SigmaHQ's, and the approved local ones (step 7), minus the
+    rules the analyst switched off."""
+    from privasoc.detect import authored
+    from privasoc.detect.engine import Engine, rule_dirs
+    from privasoc.detect.sigma import Unsupported, compile_text, load_rules
+
+    # Approved and disabled rules live in the database, so the cache must not be shared by
+    # two installations that happen to use the same SigmaHQ directory.
+    key = (str(s.sigma_dir.resolve()), str(s.db_path.resolve()))
+    if reload or key not in _ENGINE:
+        rules = load_rules(rule_dirs(s.sigma_dir))
+        store = Store(s.db_path)
+        try:
+            for c in authored.listing(store, "approved"):
+                try:
+                    rules += compile_text(c["yaml"], "ai", f"local:{c['id']}")
+                except Unsupported as exc:
+                    from privasoc.detect.sigma import Rule
+
+                    rules.append(Rule(c["id"], c["title"], "low", "ai", f"local:{c['id']}",
+                                      unsupported=str(exc)))  # fmt: skip
+            off = authored.disabled(store)
+        finally:
+            store.close()
+        for r in rules:
+            if r.id in off:
+                r.disabled = off[r.id]
+        _ENGINE[key] = Engine(rules)
+    return _ENGINE[key]
+
+
+def sigma_fetch(s: Settings) -> dict:
+    """Download the SigmaHQ rules privasoc can normalise (DRL 1.1: kept out of git)."""
+    import io
+    import shutil
+    import tarfile
+
+    import httpx
+
+    url = f"https://codeload.github.com/SigmaHQ/sigma/tar.gz/refs/tags/{SIGMA_TAG}"
+    try:
+        resp = httpx.get(url, timeout=120, follow_redirects=True)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ActionError(f"cannot download SigmaHQ rules: {exc}") from exc
+    dest = s.sigma_dir
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    n = 0
+    with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+        for m in tar.getmembers():
+            rel = m.name.split("/", 1)[1] if "/" in m.name else ""
+            wanted = rel == "LICENSE" or any(rel.startswith(d + "/") for d in SIGMA_DIRS)
+            if not wanted or not m.isfile() or ".." in rel or rel.startswith("/"):
+                continue
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(tar.extractfile(m).read())
+            n += rel.endswith(".yml")
+    (dest / "SOURCE").write_text(f"SigmaHQ {SIGMA_TAG}, Detection Rule License 1.1\n")
+    eng = engine(s, reload=True)
+    return {"files": n, "tag": SIGMA_TAG, **eng.stats()}
+
+
+def find_rule(s: Settings, rule_id: str):
+    return next((r for r in engine(s).rules if r.id == rule_id), None)
+
+
+def detect_run(store: Store, s: Settings) -> dict:
+    """One detection pass: Sigma on new events, host alerts, pending notifications."""
+    from privasoc.detect import alerts as al
+    from privasoc.detect.engine import host_alerts
+
+    out = engine(s).run(store, dedup_minutes=s.alert_dedup_minutes)
+    out["host_alerts"] = host_alerts(store, host_health, s.alert_dedup_minutes)
+    out.update(
+        al.notify_pending(store, s.notify_url, s.notify_format, s.notify_min_level, s.public_url)
+    )
+    return out
+
+
+def set_alert_status(store: Store, aid: int, status: str, reason: str | None = None) -> dict:
+    from privasoc.detect import alerts as al
+
+    if not al.alert(store, aid):
+        raise ActionError(f"unknown alert {aid}")
+    try:
+        al.set_status(store, aid, status, reason)
+    except ValueError as exc:
+        raise ActionError(str(exc)) from exc
+    return al.alert(store, aid)
+
+
+def triage_alert(
+    store: Store,
+    s: Settings,
+    aid: int,
+    provider: str = "local",
+    progress: Callable[[str], None] | None = None,
+) -> dict:
+    """AI triage of one alert on pseudonymised evidence (D53)."""
+    import httpx
+
+    from privasoc.detect import alerts as al
+    from privasoc.detect import triage
+    from privasoc.llm import GatewayRefused, LeakError, LLMClient
+
+    say = progress or (lambda _m: None)
+    a = al.alert(store, aid)
+    if not a:
+        raise ActionError(f"unknown alert {aid}")
+    if provider not in {"local", "remote"}:
+        raise ActionError("provider must be local or remote")
+    if provider == "remote" and not s.llm_remote_url:
+        raise ActionError("no remote API configured (PRIVASOC_LLM_REMOTE_URL)")
+    events = al.alert_events(store, aid, triage.MAX_EVENTS)
+    rule = find_rule(s, a["rule_id"])
+    pz = pseudonymizer(s)
+    try:
+        if provider == "remote" and s.remote_residual_pass:
+            raw = [str((e["ecs"].get("event") or {}).get("original") or "") for e in events]
+            pz = pz.with_rules(_local_residual_rules(store, s, [x for x in raw if x], say))
+        llm = LLMClient(
+            _endpoint(s, provider, session=f"alert-{aid}"),
+            call_log=store.log_llm_call,
+            timeout=s.llm_timeout,
+            max_tokens=s.llm_max_tokens,
+            num_ctx=s.llm_num_ctx,
+        )
+        try:
+            llm.check()
+        except RuntimeError as exc:
+            raise ActionError(str(exc)) from exc
+        say(f"{len(events)} event(s), asking the {provider} model")
+        try:
+            rec = triage.triage(a, rule, events, llm, pz)
+        except LeakError as exc:
+            raise ActionError(f"refused by the leak guard: {exc}") from exc
+        except GatewayRefused as exc:
+            # privasoc+ PD8: nothing left the machine; the previous triage stays as it was.
+            raise ActionError(f"{exc}. The existing triage is kept; review by an analyst.") from exc
+        except httpx.HTTPError as exc:
+            raise ActionError(f"LLM error: {exc}") from exc
+    finally:
+        pz.vault.close()
+    from privasoc.store import utcnow
+
+    rec["at"] = utcnow()
+    al.save_triage(store, aid, rec)
+    say(
+        f"verdict {rec['result']['verdict'] if rec['result'] else '?'}; "
+        f"{len(rec['problems'])} problem(s)"
+    )
+    return rec
+
+
+def reidentify(s: Settings, text: str) -> str:
+    """Pseudonyms back to real values, for display on this machine only."""
+    pz = pseudonymizer(s)
+    try:
+        return pz.reidentify(text)
+    finally:
+        pz.vault.close()
+
+
+def reidentify_obj(s: Settings, obj):
+    """Same as `reidentify`, on every string of a JSON-like structure (keeps it valid)."""
+    pz = pseudonymizer(s)
+
+    def walk(x):
+        if isinstance(x, str):
+            return pz.reidentify(x)
+        if isinstance(x, list):
+            return [walk(v) for v in x]
+        if isinstance(x, dict):
+            return {k: walk(v) for k, v in x.items()}
+        return x
+
+    try:
+        return walk(obj)
+    finally:
+        pz.vault.close()
+
+
+# ---------------------------------------------------------------------- AI rules and hunting
+# (step 7, D54, D55)
+
+
+def _rule_source_text(s: Settings, store: Store, rule) -> str:
+    """The YAML a rule was loaded from (the whole file: a correlation and its base rule)."""
+    from privasoc.detect import authored
+    from privasoc.detect.engine import BUILTIN_RULES
+
+    if rule.origin == "ai":
+        c = authored.get(store, rule.path.removeprefix("local:"))
+        return c["yaml"] if c else ""
+    base = BUILTIN_RULES if rule.origin == "privasoc" else s.sigma_dir / "rules"
+    p = base / rule.path
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def _same_file(s: Settings, rule) -> list[str]:
+    return [r.id for r in engine(s).rules if r.path == rule.path and r.origin == rule.origin]
+
+
+def _context_events(store: Store, limit: int = 2000) -> tuple[list[dict], list[dict]]:
+    """(recent ECS documents for the field catalogue, a few examples, one per source)."""
+    import json as _json
+
+    rows = store.conn.execute(
+        "SELECT id, source, ecs FROM events ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    docs, examples, seen = [], [], set()
+    for eid, source, raw in rows:
+        d = _json.loads(raw)
+        docs.append(d)
+        if source not in seen and len(examples) < 6:
+            seen.add(source)
+            examples.append({"id": eid, "ecs": d})
+    return docs, examples
+
+
+def _summary(bt: dict, keep: int = 50) -> dict:
+    out = {"events": bt["events"], "unsupported": bt["unsupported"], "results": []}
+    for r in bt["results"]:
+        x = {k: r[k] for k in ("id", "title", "kind", "matches")}
+        x["event_ids"] = r["event_ids"][:keep]
+        if "groups" in r:
+            x["groups"] = [{**g, "event_ids": g["event_ids"][:10]} for g in r["groups"][:20]]
+        out["results"].append(x)
+    return out
+
+
+def _fp_effect(store: Store, rule_id: str, rules) -> dict:
+    """Would the derived rule still match the events of past alerts of the original one?"""
+    from privasoc.detect import alerts as al
+    from privasoc.detect.engine import backtest_events, event_time
+
+    out = {"fp": 0, "fp_removed": 0, "tp": 0, "tp_kept": 0, "tp_lost": []}
+    for a in al.alerts(store, "all", limit=1000):
+        if a["rule_id"] != rule_id or a["status"] not in ("closed_fp", "closed_tp"):
+            continue
+        evs = al.alert_events(store, a["id"], 200)
+        evidence = [
+            (e["id"], e["source"], event_time(e["ecs"], e["received_at"]), e["ecs"])
+            for e in reversed(evs)
+        ]
+        bt = backtest_events(rules, evidence)
+        hit = any(r["kind"] != "base" and r["matches"] for r in bt["results"])
+        if a["status"] == "closed_fp":
+            out["fp"] += 1
+            out["fp_removed"] += not hit
+        else:
+            out["tp"] += 1
+            if hit:
+                out["tp_kept"] += 1
+            else:
+                out["tp_lost"].append(a["id"])
+    return out
+
+
+def author_rule(
+    store: Store,
+    s: Settings,
+    origin: str,
+    request: str = "",
+    ref: int | None = None,
+    provider: str = "local",
+    progress: Callable[[str], None] | None = None,
+    hours: float | None = None,
+) -> dict:
+    """The model writes a rule (origin: request | false_positive | event | hunt)."""
+    import httpx
+
+    from privasoc.detect import alerts as al
+    from privasoc.detect import author, authored
+    from privasoc.detect.engine import backtest
+    from privasoc.detect.sigma import compile_text
+    from privasoc.llm import LeakError, LLMClient
+
+    say = progress or (lambda _m: None)
+    if origin not in {"request", "false_positive", "event", "hunt"}:
+        raise ActionError("unknown origin")
+    docs, examples = _context_events(store)
+    if not docs:
+        raise ActionError("no normalised event yet: rules are written against real fields")
+    extra, replaces, original = "", None, None
+    if origin in {"false_positive", "event"}:
+        a = al.alert(store, int(ref or 0))
+        if not a:
+            raise ActionError(f"unknown alert {ref}")
+        evs = al.alert_events(store, a["id"], 5)
+        if not evs:
+            raise ActionError("this alert has no event to learn from")
+        examples = [{"id": e["id"], "ecs": e["ecs"]} for e in evs]
+        if origin == "false_positive":
+            if a["status"] != "closed_fp":
+                raise ActionError("the alert must be closed as a false positive first")
+            original = find_rule(s, a["rule_id"])
+            if not original:
+                raise ActionError("the rule of this alert is not loaded any more")
+            text = _rule_source_text(s, store, original)
+            request = request or (
+                "The example events were closed by the analyst as a FALSE POSITIVE of the rule "
+                "below. Return the whole rule (every document) with a new filter selection that "
+                "excludes events like these, as narrowly as possible so real attacks still match "
+                "(add `and not filter_...` to the condition). Keep everything else."
+            )
+            extra = "Current rule:\n" + text
+            replaces = ",".join(_same_file(s, original))
+        else:
+            request = request or (
+                "Write a rule that detects events like the example events, generalising beyond "
+                "their exact values when that still describes the same activity."
+            )
+    elif not request.strip():
+        raise ActionError("describe what the rule should find")
+    if origin == "hunt":
+        request = ("Write a rule that answers this question when run over past events: "
+                   + request)  # fmt: skip
+    if provider == "remote" and not s.llm_remote_url:
+        raise ActionError("no remote API configured (PRIVASOC_LLM_REMOTE_URL)")
+    pz = pseudonymizer(s)
+    try:
+        if provider == "remote" and s.remote_residual_pass:
+            raw = [str((e["ecs"].get("event") or {}).get("original") or "") for e in examples]
+            residual_input = [request, extra, *filter(None, raw)]
+            pz = pz.with_rules(_local_residual_rules(store, s, residual_input, say))
+        llm = LLMClient(_endpoint(s, provider), call_log=store.log_llm_call,
+                        timeout=s.llm_timeout, max_tokens=s.llm_max_tokens,
+                        num_ctx=s.llm_num_ctx)  # fmt: skip
+        try:
+            llm.check()
+        except RuntimeError as exc:
+            raise ActionError(str(exc)) from exc
+        llm.token_provider = pz.vault.address_tokens_in
+        try:
+            draft = author.write(llm, pz, request, author.catalogue(docs), examples,
+                                 extra=extra, progress=say)  # fmt: skip
+        except LeakError as exc:
+            raise ActionError(f"refused by the leak guard: {exc}") from exc
+        except httpx.HTTPError as exc:
+            raise ActionError(f"LLM error: {exc}") from exc
+    finally:
+        pz.vault.close()
+    out = {"status": draft.status, "attempts": draft.attempts, "reason": draft.reason,
+           "model": f"{llm.endpoint.name}:{llm.endpoint.model}"}  # fmt: skip
+    if draft.status != "proposed":
+        return out
+    rules = compile_text(draft.yaml, "ai")
+    say("backtest on the stored events")
+    bt = _summary(backtest(store, rules, hours=hours))
+    if original is not None:
+        bt["false_positive"] = _fp_effect(store, original.id, rules)
+    import hashlib
+
+    rid = "ai-" + hashlib.sha256(draft.yaml.encode()).hexdigest()[:8]
+    authored.save(store, rid, draft.yaml, draft.title, origin, ref=str(ref) if ref else None,
+                  request=request, model=out["model"], replaces=replaces, backtest=bt)  # fmt: skip
+    if origin == "hunt":
+        authored.set_status(store, rid, "hunt")  # a hunt is not a rule proposal until kept
+    return {**out, "id": rid, "yaml": draft.yaml, "title": draft.title, "backtest": bt}
+
+
+def decide_rule(store: Store, s: Settings, rid: str, status: str) -> dict:
+    """approved | rejected | disabled | proposed (keep a hunt as a proposal)."""
+    from privasoc.detect import authored
+
+    c = authored.get(store, rid)
+    if not c:
+        raise ActionError(f"unknown rule {rid}")
+    if status not in {"approved", "rejected", "disabled", "proposed"}:
+        raise ActionError("status must be approved, rejected, disabled or proposed")
+    if status == "approved" and c["status"] not in {"proposed", "disabled"}:
+        raise ActionError(f"only a proposed rule can be approved (is {c['status']})")
+    authored.set_status(store, rid, status)
+    if c["replaces"]:
+        for old in c["replaces"].split(","):
+            if status == "approved":
+                authored.disable(store, old, f"replaced by {rid} (false positive fix)")
+            elif status in {"disabled", "rejected"}:
+                authored.enable(store, old)
+    engine(s, reload=True)
+    return authored.get(store, rid)
+
+
+def toggle_rule(store: Store, s: Settings, rule_id: str, off: bool, reason: str = "") -> None:
+    """Switch any rule (SigmaHQ, privasoc) off or on; a correlation takes its base rules."""
+    from privasoc.detect import authored
+
+    r = find_rule(s, rule_id)
+    if not r:
+        raise ActionError(f"unknown rule {rule_id}")
+    for rid in _same_file(s, r):
+        if off:
+            authored.disable(store, rid, reason or "switched off by the analyst")
+        else:
+            authored.enable(store, rid)
+    engine(s, reload=True)

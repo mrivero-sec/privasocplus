@@ -1,0 +1,39 @@
+prefix: '^(?P<ts>[A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2}) (?P<host>\S+) +(?:-- +)?(?P<proc>[\w./-]+)(?:\([^)]*\))?(?:\[(?P<pid>\d+)\])?(?: \d+(?:\.\d+)+)?: (?P<rest>.*)$'
+body: rest
+timestamp: {group: ts, format: '%b %d %H:%M:%S'}
+constants: {event.kind: event}
+fields: {host.hostname: host, process.name: proc, process.pid: pid, message: rest}
+shapes:
+  - name: pam_auth_failure
+    regex: '^authentication failure;.*rhost=(?P<ip>\S+)(?: +user=(?P<user>\S+))? *$'
+    fields: {source.ip: ip, user.name: user}
+    constants: {event.category: [authentication], event.outcome: failure, event.action: authentication-failure}
+  - name: pam_failure_without_address
+    regex: '^(?:authentication failure;|check pass; user unknown)'
+    constants: {event.category: [authentication], event.outcome: failure, event.action: authentication-failure}
+  - name: ssh_failed_login
+    regex: '^Failed (?:password|publickey) for (?:invalid user )?(?P<user>\S+) from (?P<ip>\S+) port (?P<port>\d+)'
+    fields: {user.name: user, source.ip: ip, source.port: port}
+    constants: {event.category: [authentication], event.outcome: failure, network.protocol: ssh, event.action: authentication-failure}
+  - name: ssh_accepted_login
+    regex: '^Accepted (?:password|publickey) for (?P<user>\S+) from (?P<ip>\S+) port (?P<port>\d+)'
+    fields: {user.name: user, source.ip: ip, source.port: port}
+    constants: {event.category: [authentication], event.outcome: success, network.protocol: ssh, event.action: authentication-success}
+  - name: session_open
+    regex: '^session opened for user (?P<user>\S+)'
+    fields: {user.name: user}
+    constants: {event.category: [session], event.type: [start], event.action: session-open}
+  - name: session_close
+    regex: '^session closed for user (?P<user>\S+)'
+    fields: {user.name: user}
+    constants: {event.category: [session], event.type: [end], event.action: session-close}
+  - name: ftp_connection
+    regex: '^connection from (?P<ip>\S+) \(.*\) at '
+    fields: {source.ip: ip}
+    constants: {event.category: [network], event.type: [connection, start], network.protocol: ftp, event.action: connection-open}
+  - name: anonymous_ftp_login
+    regex: '^ANONYMOUS FTP LOGIN FROM (?P<ip>[^, ]+),.*\((?P<user>anonymous)\)'
+    fields: {source.ip: ip, user.name: user}
+    constants: {event.category: [authentication], event.outcome: success, network.protocol: ftp, event.action: authentication-success}
+  - name: unclassified_message
+    regex: '^.*$'

@@ -21,8 +21,8 @@ Sessions de conception : 2026-10-07 (analyse initiale par quatre analyses parall
 
 | ID | Décision | Statut |
 |---|---|---|
-| PD3 | Pas de nouveau dépôt de code. Le code va dans les deux dépôts existants (module `escalate/` dans privasoc, profil « privasoc » dans sovgate) ; ce dossier contient la conception, les décisions, le plan et, à partir de P1, la composition Docker (`deploy/`). Les deux dépôts restent publiables séparément. | retenu |
-| PD4 | Langue : ce dossier en français ; le code, les docs et les commits des deux dépôts restent en anglais. Pas de tiret cadratin dans les documents. | retenu |
+| ~~PD3~~ | ~~Pas de nouveau dépôt de code. Le code va dans les deux dépôts existants (module `escalate/` dans privasoc, profil « privasoc » dans sovgate) ; ce dossier contient la conception, les décisions, le plan et, à partir de P1, la composition Docker (`deploy/`). Les deux dépôts restent publiables séparément.~~ Remplacé par PD29 (un seul projet). | remplacé |
+| PD4 | Langue : ce dossier en français ; le code, les docs et les commits des deux dépôts (aujourd'hui `packages/`, PD29) restent en anglais. Pas de tiret cadratin dans les documents. | retenu |
 
 ## Architecture
 
@@ -139,3 +139,14 @@ eeds_escalation`, aucun nouveau parseur activé. Aucune alerte pour ces sources 
 | N38 | À la demande de l’opérateur, Linux reste en revue avec extraction enrichie, privasoc D62/I48. Candidat manuel 90198064, exemple structuré réutilisable, pas de routage automatique : 2 000 lignes vérifiées localement, 2 000 sorties, validation ECS et ancrage passants. Processus 2000, PID 1849, IP source 1211, utilisateur 620, résultat 609, corps non classés 236. | Comptes de présence, pas exactitude des champs ; messages inconnus sans verdict inventé. Année courante inférée pour les horodatages sans année. Aucun import ni activation supplémentaire. | Test opérationnel |
 
 | N39 | Validation finale N38 : suite complète 206 tests passants avec Vector, régression ciblée passante après dernière variante ; Ruff et Gitleaks historique/index passants. Commit local `257c7b8`, non poussé. Page de revue du candidat 90198064 HTTP 200, état proposed confirmé ; les 2 000 lignes Linux restent en quarantaine conformément au choix de l’opérateur. | La suite du test attend une revue de qualité, sans nouvelle demande d’activation automatique. | Test opérationnel |
+
+## Un seul projet (2026-10-07)
+
+| ID | Décision | Statut |
+|---|---|---|
+| PD29 | **privasoc+ est le seul projet.** Remplace PD3. Les dépôts `privasoc` et `sovereign-llm-gateway` sont arrêtés et figés (une note de déménagement dans leur README, rien d'autre). Leur code vit ici dans un monorepo, workspace uv à deux paquets : `packages/privasoc` (SOC local) et `packages/gateway` (passerelle sovgate), un seul `uv.lock` racine, une seule CI, ce journal comme **unique** journal de décisions (ceux des paquets sont figés et servent d'historique : D1 à D62, I1 à I48 de privasoc restent citables). Historique git neuf : le code arrive par un commit d'import, sans les historiques des anciens dépôts (adresse e-mail personnelle dans les premiers commits de sovgate N21, traces de session I36 de privasoc). Fusion en un seul paquet Python possible plus tard, non décidée. | retenu |
+
+| ID | Constat | Conséquence | Phase |
+|---|---|---|---|
+| N40 | Import fait depuis les branches `privasoc-plus` (privasoc `257c7b8`, sovgate `d2c81db`), fichiers suivis seulement. Retirés à l'import : CI, `docker-compose.yml`, `AGENTS.md` et `uv.lock` propres aux paquets (remplacés par ceux de la racine), `LICENSE` des paquets (une seule à la racine, titulaire « privasoc+ contributors » ; celle de sovgate portait un nom réel), `.gitleaksignore` de sovgate (empreintes de l'ancien historique). L'état local non suivi de privasoc (`.env`, `data/` avec coffre et base, `vector/pipeline.yaml`, `docs/*.fr.md`) est copié dans `packages/privasoc/`, toujours ignoré par git ; les anciens dossiers gardent leur copie. Dockerfile de privasoc construit depuis la racine (`docker build -f packages/privasoc/Dockerfile .`, `uv sync --frozen --package privasoc` vérifié hors Docker) ; `deploy/` pointe vers `../packages/...`. Vérifications : privasoc 174 passants et 32 ignorés sans Vector (206 attendus avec Vector, N39), gateway 89 passants, contrat 8 passants et 3 ignorés sans Docker, Ruff et Gitleaks passants. | Lancer la suite privasoc avec Vector sur la machine Windows depuis `packages/privasoc`. | |
+| N41 | Anonymat (AGENTS règle 2) : le dépôt distant de privasoc+ est sous un compte dont le nom évoque le nom réel de l'opérateur, et ses deux premiers commits ont une adresse e-mail personnelle comme auteur. Les commits de l'import utilisent l'identité « no-reply ». | Décision de l'opérateur : garder l'anonymat (nouveau compte ou dépôt, réécriture des deux commits) ou l'abandonner (alors amender la règle 2 et D43). Rien n'est poussé tant que ce n'est pas tranché. | |

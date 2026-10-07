@@ -8,8 +8,8 @@ est imposée avant les appels distants, même si le `.env` source avait d'autres
 
 ## Préparer
 
-Depuis `deploy/`, copier `.env.example` en `.env`, renseigner les chemins des deux
-dépôts et `PRIVASOC_API_TOKEN` avec la même valeur que dans le `.env` de privasoc.
+Depuis `deploy/`, copier `.env.example` en `.env`, garder les chemins par défaut des deux
+paquets (`../packages/privasoc`, `../packages/gateway`) et renseigner `PRIVASOC_API_TOKEN` avec la même valeur que dans le `.env` de privasoc.
 Ne pas copier la clé fournisseur dans ce dernier. Vector ne reçoit que le jeton
 d'ingestion, pas les secrets du coffre ou du fournisseur. Ses configurations doivent
 utiliser `PRIVASOC_INGEST_URL` et `PRIVASOC_API_TOKEN`.

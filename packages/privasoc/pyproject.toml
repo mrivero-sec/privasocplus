@@ -1,0 +1,44 @@
+[project]
+name = "privasoc"
+version = "0.1.0"
+description = "Privacy-first, local-LLM SOC analyst: AI-generated log parsers for unknown formats, with pseudonymisation and evaluations."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=43",
+    "drain3>=0.9.11",
+    "fastapi>=0.115",
+    "httpx>=0.28.1",
+    "jinja2>=3.1",
+    "pydantic-settings>=2.4",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6.0.3",
+    "typer>=0.12",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+privasoc = "privasoc.cli:app"
+
+[dependency-groups]
+dev = ["httpx>=0.27", "pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]  # VRL fixtures are kept verbatim
+"src/privasoc/prompts.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

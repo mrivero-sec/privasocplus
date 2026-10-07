@@ -2,7 +2,7 @@
 
 Fichier de reprise. Un agent qui reprend le travail lit d'abord [AGENTS.md](../AGENTS.md), puis ce fichier. Mettre à jour à la fin de chaque session : ce qui est fait, où, comment le vérifier, et la suite.
 
-## État au 2026-10-07 (revue 3)
+## État au 2026-10-07 (revue 3, puis import dans un seul dépôt)
 
 Audit statique Codex Security du dossier terminé (N35), sans vulnérabilité étayée dans le contenu examiné. La couverture opérationnelle reste partielle et les deux dépôts sources sont hors périmètre.
 
@@ -16,20 +16,14 @@ Le triage distant reste une action humaine (D53 de privasoc) : rien n'escalade a
 
 ## Où est le code
 
-Rien n'est poussé ni fusionné. Chaque dépôt a une branche locale `privasoc-plus` partie de `main`.
+**Un seul dépôt** (PD29) : ce dossier, branche `main`. Le code des deux anciens dépôts y a été importé le 2026-10-07 avec un historique git neuf (N40) :
 
-| Dépôt | Branche | Commits | Contenu |
-|---|---|---|---|
-| `privasoc` | `privasoc-plus` | `bdaad37` Talk to an egress gateway safely (privasoc+ P1) | I40 : en-têtes vers la passerelle, `GatewayRefused`, enveloppe `<document>`, `ensure_local` qui refuse une passerelle |
-| `privasoc` | `privasoc-plus` | `6962d7e` Record when and why an alert is closed (privasoc+ P0) | I41 : `closed_at`, `close_reason`, `alerts close <id> benign`, bouton UI |
-| `privasoc` | `privasoc-plus` | `044a1b7` Fix two evidence pseudonymisation bugs found by the triage bench | I42 : propagation en une passe qui ne réécrit plus les jetons ; détail d'alerte pseudonymisé comme document |
-| `privasoc` | `privasoc-plus` | `fa9fdbb` Add the triage bench and its evaluation (step 8, privasoc+ P0) | D57, I42 : `bench_triage.py`, `eval_triage.py`, `privasoc eval triage` / `triage-report`, ligne de base |
-| `sovereign-llm-gateway` | `privasoc-plus` | `a67fad3` feat: v0.3.1 verifier profile for self-pseudonymising clients | allowlist, détecteurs vérificateurs, profil `policy.privasoc.yaml`, `/v1/models`, clés API |
-| `privasoc` | `privasoc-plus` | `945ae9c` Verify minted gateway addresses and cluster triage evaluation | D59/D60, I43/I44 : manifeste IP/MAC, alias DNS, intervalles par familles, paires complètes, rapport de référence régénéré |
-| `sovereign-llm-gateway` | `privasoc-plus` | `d2c81db` Require authenticated address manifests for privasoc egress | SG1 à SG4 : profil strict, manifeste retiré, réglages NER/modèle effectif, tests et exceptions historiques synthétiques précises |
-| ce dossier | (pas de dépôt git) | | `integration/` (tests de contrat), `deploy/` (Docker Compose), docs |
+| Chemin | Origine | Dernier commit importé |
+|---|---|---|
+| `packages/privasoc` | ancien dépôt `privasoc`, branche `privasoc-plus` | `257c7b8` |
+| `packages/gateway` | ancien dépôt `sovereign-llm-gateway`, branche `privasoc-plus` | `d2c81db` |
 
-Pour publier : relire les diffs, fusionner `privasoc-plus` dans `main` de chaque dépôt, pousser. Avant toute mise en avant publique de sovgate, traiter le constat N21 (auteur des premiers commits).
+Les hashes cités plus bas (`bdaad37`, `945ae9c`, `a67fad3`...) désignent des commits des anciens dépôts, qui restent consultables là-bas mais ne reçoivent plus rien. Rien n'est poussé : l'anonymat du dépôt distant est à trancher avant (N41).
 
 ## Ce qui a été fait
 
@@ -67,8 +61,7 @@ Pour publier : relire les diffs, fusionner `privasoc-plus` dans `main` de chaque
 
 ### P0, privasoc : banc de triage (D57, I42)
 
-- `src/privasoc/bench_triage.py` : 16 familles de scénarios (règles SSH, scan de ports, scan web, DNS long), 8 dev et 8 holdout, 2 variantes chacune, 6 jumeaux d'injection, 38 cas. Vérité : `true_positive`, `benign`, `false_positive`. Deux familles marquées 
-eeds_context` (scanner autorisé, antivirus DNS). `load()` fait passer les événements par la vraie détection (règles privasoc seulement) et lève une erreur si un cas ne déclenche pas exactement son alerte.
+- `src/privasoc/bench_triage.py` : 16 familles de scénarios (règles SSH, scan de ports, scan web, DNS long), 8 dev et 8 holdout, 2 variantes chacune, 6 jumeaux d'injection, 38 cas. Vérité : `true_positive`, `benign`, `false_positive`. Deux familles marquées `needs_context` (scanner autorisé, antivirus DNS). `load()` fait passer les événements par la vraie détection (règles privasoc seulement) et lève une erreur si un cas ne déclenche pas exactement son alerte.
 - `src/privasoc/eval_triage.py` : `run()` (reprise possible, une ligne JSONL par cas, modèle et run), `AlwaysTruePositive` (ligne de base), `summarise()` (accuracy avec abstention, rappel TP, TP manqués, rappel des négatifs, label exact, ECE, Brier, AUROC, injection, intervalles bootstrap), `compare()` (comparaison appariée pour le go / no-go), `report()`.
 - CLI : `privasoc eval triage --set dev|holdout|all --provider local|remote|always-tp --runs 3`, `privasoc eval triage-report [--compare a,b]`.
 - Résultats : `evaluation/results-triage.jsonl` et `reports/triage.md` avec la ligne de base seulement (accuracy 0,5 ; rappel TP 1 ; rappel des négatifs 0).
@@ -78,6 +71,20 @@ eeds_context` (scanner autorisé, antivirus DNS). `load()` fait passer les évé
 - `tests/test_bench_triage.py` : 9 tests.
 
 ## Comment vérifier
+
+Depuis la racine (workspace uv, PD29) :
+
+```bash
+uv sync --all-packages
+uv run ruff check .
+(cd packages/privasoc && uv run ruff check . && uv run ruff format --check src tests && uv run pytest -q)
+(cd packages/gateway && uv run ruff check . && uv run pytest -q)
+uv run pytest -q integration
+# 2026-10-07 après l'import, sans Vector ni Docker : privasoc 174 passants, 32 ignorés ;
+# gateway 89 passants ; contrat 8 passants, 3 ignorés. Avec Vector : 206 privasoc (N39).
+```
+
+Ancienne procédure, avant l'import (pour mémoire) :
 
 Environnements virtuels **hors des dépôts** (ne pas toucher au `.venv` existant de privasoc, créé sous Windows) :
 
@@ -102,18 +109,21 @@ python3 -m venv ~/venvs/sovgate && ~/venvs/sovgate/bin/pip install -e ".[dev]"
 ## Pièges connus
 
 - `ruff format --check` signale déjà `README.md` dans sovgate avant nos changements : ne pas reformater ce qui n'a pas été touché.
-- Les tests de contrat utilisent des installations non éditables : réinstaller les deux paquets après chaque changement.
+- Les tests de contrat utilisent les paquets du workspace en mode éditable : plus besoin de réinstaller.
 - Commits : identité « no-reply » du dépôt privasoc, sans « Co-Authored-By » ni lien de session (I36 de privasoc).
 - La plage 203.0.113.0/24 (documentation) est « privée » pour Python : privasoc la mappe dans 10/8, pas dans 198.18/15.
-- Ce dossier n'est pas un dépôt git ; un `integration/__pycache__` peut apparaître (utiliser `PYTHONDONTWRITEBYTECODE=1`).
+- Les tests de privasoc et de gateway se lancent depuis le dossier de leur paquet (chemins relatifs dans les tests).
+- Fichiers Markdown : UTF-8 et fins de ligne LF (`.gitattributes`). Une édition par PowerShell avait inséré du UTF-16 et transformé des « `n » en retours à la ligne ; corrigé le 2026-10-07.
 
 ## Prochaines actions (dans l'ordre)
 
-Suivi sécurité N35 : auditer séparément les implémentations des deux dépôts. Le rapport du scan `b0283784-124e-4034-aaa6-cdc5283580c7` est conservé dans le workbench Codex Security, avec modèle de menace et couverture. Audit hors ligne par lecture statique, sans nouveaux tests ou appels distants ; aucune branche ni aucun commit source modifié. Docker, NER réel et comportement de panne restent à vérifier.
+0. **Trancher l'anonymat du dépôt distant** (N41) avant le premier push du monorepo, puis archiver les deux anciens dépôts sur GitHub. Lancer une fois la suite privasoc avec Vector depuis `packages/privasoc` (206 attendus).
+
+Suivi sécurité N35 : auditer les implémentations des deux paquets (`packages/`). Le rapport du scan `b0283784-124e-4034-aaa6-cdc5283580c7` est conservé dans le workbench Codex Security, avec modèle de menace et couverture. Audit hors ligne par lecture statique, sans nouveaux tests ou appels distants ; aucune branche ni aucun commit source modifié. Docker, NER réel et comportement de panne restent à vérifier.
 
 1. **P0, mesures** (sur la machine qui a le GPU et Ollama ; l'environnement de construction ne joint pas le modèle local) :
    ```bash
-   cd privasoc
+   cd packages/privasoc
    uv run privasoc eval triage --set all --runs 3        # ~38 x 3 triages, quelques secondes chacun
    uv run privasoc eval triage-report                    # reports/triage.md
    ```
@@ -192,8 +202,7 @@ Aucun code source n'a changé et aucune nouvelle mesure du banc P0 n'a été pro
   (Nginx reconnu comme `apache_combined`) + 6 098 lignes en quarantaine. Aucun doublon
   volontairement créé. Les commandes manuelles du guide sont conservées comme documentation.
 - Six essais de génération locale sur les formats inconnus : `qwen3:8b`, mode structuré,
-  deux tentatives maximum, pas de repli externe. Six 
-eeds_escalation` ; aucun parseur
+  deux tentatives maximum, pas de repli externe. Six `needs_escalation` ; aucun parseur
   généré activé. Les pages Hosts et Parsers ont été vérifiées en session authentifiée (200).
 - Détection lancée, aucune alerte pour ces sources au contrôle. L’absence d’alerte ne
   signifie pas que les logs sont bénins : la plupart ne sont pas normalisés.

@@ -1,0 +1,21 @@
+# privasoc+: one repository, two packages (DECISIONS PD29).
+#   packages/privasoc  local SOC: collection, parsers, detection, triage, evaluation
+#   packages/gateway   egress gateway (sovgate): verification, spotlighting, audit
+# Virtual workspace root: nothing is built from here.
+
+[tool.uv.workspace]
+members = ["packages/privasoc", "packages/gateway"]
+
+[dependency-groups]
+dev = ["httpx>=0.27", "pytest>=8", "ruff>=0.6", "uvicorn>=0.30"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["packages"]  # each package keeps its own ruff settings
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"integration/*" = ["E501"]  # test data kept on one line
