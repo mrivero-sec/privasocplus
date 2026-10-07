@@ -1,0 +1,100 @@
+# privasoc+ (P1): privasoc with sovgate as its only way out (DECISIONS PD6).
+#
+# privasoc keeps its own stack (privasoc + Vector); this file adds the gateway and
+# points privasoc's remote endpoint at it. The gateway is reachable from privasoc
+# only on a dedicated internal network; the frontier key lives in the gateway alone.
+#
+#   cp .env.example .env    # fill in the secrets
+#   docker compose --env-file .env up -d --build  # local only
+#   docker compose --env-file .env --profile frontier -f docker-compose.yml -f compose.frontier.yml up -d --build
+#
+# Status: not yet run end to end with Docker (see docs/PROGRESS.md).
+
+services:
+  privasoc:
+    build: ${PRIVASOC_DIR:-../../privasoc}
+    env_file: ${PRIVASOC_DIR:-../../privasoc}/.env
+    environment:
+      PRIVASOC_HOST: 0.0.0.0
+      PRIVASOC_DATA_DIR: /data
+      PRIVASOC_VECTOR_DIR: /vector
+      # remote = the gateway, never the provider directly
+      PRIVASOC_LLM_LOCAL_URL: http://local-model:11434/v1
+      PRIVASOC_LLM_LOCAL_MODEL: ${LOCAL_MODEL:-qwen3:8b}
+      PRIVASOC_LLM_REMOTE_URL: ""
+      PRIVASOC_LLM_REMOTE_MODEL: ${FRONTIER_MODEL:-gpt-4o-mini}
+      PRIVASOC_LLM_REMOTE_API_KEY: ""
+      PRIVASOC_LLM_REMOTE_TENANT: privasoc
+      PRIVASOC_AUTO_FALLBACK: "false"
+      PRIVASOC_REMOTE_RESIDUAL_PASS: "true"
+    volumes:
+      - ${PRIVASOC_DIR:-../../privasoc}/data:/data
+      - ${PRIVASOC_DIR:-../../privasoc}/vector:/vector
+    ports:
+      - "${PRIVASOC_BIND:-127.0.0.1}:8000:8000"
+    networks: [ingest, gateway-link, model-link]
+    depends_on: [local-model]
+    restart: unless-stopped
+
+  vector:
+    image: timberio/vector:0.55.0-debian
+    command: ["--config-dir", "/etc/vector", "--watch-config"]
+    environment:
+      PRIVASOC_INGEST_URL: http://privasoc:8000/ingest
+      PRIVASOC_API_TOKEN: ${PRIVASOC_API_TOKEN:-}
+    volumes:
+      - ${PRIVASOC_DIR:-../../privasoc}/vector:/etc/vector:ro
+      - ${PRIVASOC_DIR:-../../privasoc}/data/inbox:/inbox:ro
+      - vector-data:/var/lib/vector
+    ports:
+      - "${SYSLOG_BIND:-127.0.0.1}:5514:5514/udp"
+      - "${SYSLOG_BIND:-127.0.0.1}:5514:5514/tcp"
+    networks: [ingest]
+    depends_on: [privasoc]
+    restart: unless-stopped
+
+  sovgate:
+    profiles: [frontier]
+    build:
+      context: ${SOVGATE_DIR:-../../CyberAI/sovereign-llm-gateway}
+      args:
+        EXTRAS: ner
+    environment:
+      SOVGATE_POLICY: /app/config/policy.privasoc.yaml
+      SOVGATE_AUDIT_PATH: /app/audit/audit.jsonl
+      SOVGATE_HMAC_SECRET: ${SOVGATE_HMAC_SECRET:-}
+      SOVGATE_API_KEYS: ${SOVGATE_PRIVASOC_KEY:-}:privasoc
+      SOVGATE_NER_BACKEND: gliner
+      SOVGATE_EXTERNAL_MODEL: ${FRONTIER_MODEL:-gpt-4o-mini}
+      EXTERNAL_API_KEY: ${EXTERNAL_API_KEY:-}
+    volumes:
+      - ${SOVGATE_DIR:-../../CyberAI/sovereign-llm-gateway}/config:/app/config:ro
+      - sovgate-audit:/app/audit
+      - ner-cache:/home/gateway/.cache
+    networks: [gateway-link, frontier-egress]
+    # no "ports": only privasoc can reach the gateway
+    restart: unless-stopped
+
+  local-model:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    volumes:
+      - local-model-data:/root/.ollama
+    networks: [model-link, model-download]
+    # No published port. Outbound access is used to obtain model weights.
+    restart: unless-stopped
+
+networks:
+  ingest:
+    internal: true
+  gateway-link:
+    internal: true
+  model-link:
+    internal: true
+  frontier-egress: {}
+  model-download: {}
+
+volumes:
+  vector-data:
+  sovgate-audit:
+  ner-cache:
+  local-model-data:

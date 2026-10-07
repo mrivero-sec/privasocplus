@@ -1,0 +1,137 @@
+---
+config:
+  flowchart:
+    wrappingWidth: 400
+---
+flowchart TB
+  SRC["Log sources<br/>syslog, file inbox, future collectors<br/>content is attacker-controlled"]
+
+  subgraph LOCAL["Zone 1: Local privacy boundary (privasoc)"]
+
+    subgraph PLANES["Existing privasoc planes, grouped"]
+      direction LR
+      COLLECT["Collection and onboarding<br/>Vector, sender approval,<br/>quarantine, host health"]
+      PARSE["Parsing<br/>built-in parsers + LLM-written VRL<br/>sandbox, grounding, human approval"]
+      DETECT["Detection<br/>Sigma + SigmaHQ engine,<br/>correlations, alerts in SQLite"]
+      HUNT["Hunting and rule authoring<br/>NL request to Sigma,<br/>backtest, human approval"]
+      COLLECT --> PARSE -->|ECS events| DETECT
+      PARSE -->|ECS events| HUNT
+      HUNT -->|approved rules| DETECT
+    end
+
+    LOCALLLM["Local model<br/>e.g. qwen3:8b via Ollama<br/>default provider"]
+
+    subgraph TRI["AI triage with confidence-gated escalation"]
+      EVID["Evidence builder<br/>rule + max 20 events,<br/>pseudonymised field by field, vault"]
+      VALID["Local triage + validation<br/>verdict, severity, self-reported confidence<br/>citations, ATT&CK tags, invented values"]
+      SC["Self-consistency<br/>N extra samples,<br/>verdict agreement"]
+      CALMAP[("Calibration map<br/>isotonic or Platt,<br/>per rule level")]
+      CONF["Confidence estimator<br/>calibrated score 0..1 from signals:<br/>self-report, agreement, validation problems,<br/>needs_more_info, prompt truncated, rule level"]
+      GATE{"Escalation policy<br/>v1: hard rules by severity + verdict<br/>later: calibrated p < p* from costs<br/>not a fixed 0.70"}
+      BUDGET{"Budget and rate limit<br/>calls and tokens per day"}
+      RESID["Local residual-entity pass<br/>on the local model,<br/>extra rules for this call"]
+      LEAK["Re-pseudonymise + leak guard<br/>shape-preserving tokens,<br/>refuse any original value"]
+      FVALID["Validate frontier answer<br/>same checks, on privasoc tokens"]
+      REID["privasoc re-identify<br/>display only, from vault"]
+      MERGE["Escalated triage record<br/>local + frontier verdicts,<br/>disagreement flag, provenance"]
+      NEEDS["Human review queue<br/>local verdict kept, never auto-closed<br/>reason shown"]
+    end
+
+    ANALYST["Analyst<br/>CLI or authenticated web UI"]
+    CLOSE["Close alert as TP or FP<br/>ground truth, alerts table"]
+    CALDATA[("Calibration dataset<br/>signals, verdicts, outcome")]
+    TUNE["Fit calibration + tune threshold<br/>escalation rate vs missed errors"]
+  end
+
+  subgraph GW["Zone 2: Egress gateway (sovgate, still local)"]
+    GIN["OpenAI-compatible API<br/>tenant privasoc, session = alert id"]
+    GDET["Verifier, not a 2nd pseudonymiser<br/>regex + checksums, GLiNER, propagation<br/>privasoc token shapes allowlisted"]
+    GINJ["Injection scan + spotlighting<br/>evidence tagged untrusted,<br/>random per-request boundaries"]
+    GROUTE{"Policy router<br/>privasoc profile"}
+    GPS["Residual free-text names only<br/>GLiNER PERSON / ORG: typed HMAC tokens<br/>reported back as rule proposals"]
+    GBLOCK["No egress, audited<br/>restricted, unmapped IP or MAC,<br/>injection suspected, detector crash 503"]
+    GRE["Re-identify answer<br/>text + tool-call JSON"]
+    GAUD[("Hash-chained audit log<br/>counts and decisions only")]
+  end
+
+  subgraph EXT["Zone 3: External"]
+    FRONTIER["Frontier model API<br/>sees privasoc + gateway tokens only"]
+  end
+
+  %% existing pipeline, grouped
+  SRC --> PLANES
+  PLANES <-->|drafts parsers and Sigma| LOCALLLM
+  PLANES -->|alert + rule level| EVID
+
+  %% local triage and confidence
+  EVID -->|pseudonymised prompt| LOCALLLM
+  LOCALLLM ==>|JSON answer| VALID
+  LOCALLLM ==>|N samples| SC
+  VALID ==> CONF
+  SC ==> CONF
+  CALMAP ==> CONF
+  CONF ==> GATE
+  GATE ==>|"keep local"| ANALYST
+  GATE -->|"high/critical judged benign or FP,<br/>injection flagged"| NEEDS
+
+  %% escalation inside privasoc
+  GATE ==>|"escalate"| BUDGET
+  BUDGET ==>|within budget| RESID
+  RESID ==> LEAK
+
+  %% gateway, out and back
+  LEAK ==>|pseudonymised request| GIN
+  GIN ==> GDET ==> GINJ ==> GROUTE
+  GROUTE ==>|residual name| GPS
+  GPS ==> FRONTIER
+  GROUTE ==>|"clean: only privasoc tokens"| FRONTIER
+  FRONTIER ==>|answer with tokens| GRE
+  GRE ==>|privasoc tokens restored| FVALID
+  FVALID ==> REID ==> MERGE ==> ANALYST
+
+  %% blocked and degraded branches: always stay local
+  GROUTE -->|"restricted, unmapped IP/MAC, injection"| GBLOCK
+  GDET -->|detector crash| GBLOCK
+  GBLOCK -->|reason returned| NEEDS
+  BUDGET -->|exhausted| NEEDS
+  LEAK -->|"leak found, or gateway down / timeout"| NEEDS
+  FVALID -->|invalid answer| NEEDS
+  NEEDS --> ANALYST
+
+  %% audit
+  GROUTE --> GAUD
+  GBLOCK --> GAUD
+  GRE --> GAUD
+
+  %% feedback loop
+  ANALYST --> CLOSE
+  CLOSE -.->|planned| CALDATA
+  CONF -.->|signals logged| CALDATA
+  CALDATA -.-> TUNE
+  TUNE -.->|refit| CALMAP
+  TUNE -.->|threshold| GATE
+
+  %% planned: other remote calls through the same gateway
+  PLANES -.->|"remote parser and rule calls, later"| GIN
+
+  classDef existing fill:#eceff1,stroke:#607d8b,color:#263238
+  classDef newpart fill:#fff3e0,stroke:#e65100,color:#3e2723
+  classDef gate fill:#fffde7,stroke:#f9a825,color:#3e2723
+  classDef safe fill:#ffebee,stroke:#c62828,color:#3e2723
+  classDef gw fill:#e3f2fd,stroke:#1565c0,color:#0d2b4e
+  classDef ext fill:#fce4ec,stroke:#ad1457,color:#4a0e2b
+  classDef src fill:#ffffff,stroke:#9e9e9e,color:#424242,stroke-dasharray: 4 3
+
+  class COLLECT,PARSE,DETECT,HUNT,LOCALLLM,EVID,VALID,RESID,LEAK,REID,ANALYST,CLOSE existing
+  class SC,CONF,CALMAP,FVALID,MERGE,CALDATA,TUNE newpart
+  class GATE,BUDGET gate
+  class NEEDS,GBLOCK safe
+  class GIN,GDET,GINJ,GROUTE,GPS,GRE,GAUD gw
+  class FRONTIER ext
+  class SRC src
+
+  style LOCAL fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+  style GW fill:#e8f1fb,stroke:#1565c0,stroke-width:2px
+  style EXT fill:#fdf0f4,stroke:#ad1457,stroke-width:2px
+  style PLANES fill:#fafafa,stroke:#90a4ae
+  style TRI fill:#fffaf2,stroke:#e65100

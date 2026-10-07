@@ -1,0 +1,6 @@
+.env
+.venv-plus/
+.review-work/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

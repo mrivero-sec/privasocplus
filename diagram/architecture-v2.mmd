@@ -1,0 +1,132 @@
+---
+config:
+  flowchart:
+    wrappingWidth: 400
+---
+flowchart TB
+  SRC["Log sources<br/>syslog, file inbox<br/>content is attacker-controlled"]
+
+  subgraph LOCAL["Zone 1: Local privacy boundary (privasoc)"]
+
+    PLANES["Existing privasoc planes<br/>collection + onboarding, parsing,<br/>Sigma detection, hunting + rule authoring"]
+
+    subgraph CTX["P2: Enrich first"]
+      ENRICH["Context builder<br/>host health + history, past alerts of the rule<br/>and their closures, asset criticality,<br/>local IOC matches as booleans"]
+    end
+
+    subgraph SIG["P3: Local triage + uncertainty signals"]
+      EVID["Evidence, pseudonymised<br/>wrapped as untrusted document"]
+      MA["Local model A<br/>e.g. qwen3:8b"]
+      MB["Local model B<br/>other model family"]
+      VALID["Validation<br/>citations, ATT&CK ids, invented values,<br/>missing confidence"]
+      CLAIMS["Claim verifier<br/>model claims checked by<br/>deterministic SQLite queries"]
+      SIGNALS["Signals<br/>A/B disagreement, false claims,<br/>validation problems, needs_more_info,<br/>self-report (secondary)"]
+    end
+
+    ROUTER{"P4: Routing policy v1<br/>stakes = severity x asset criticality<br/>x verdict direction + signals<br/>budget cap 20 % / 7 days"}
+
+    LOCALV["Local verdict<br/>shown to analyst"]
+    HUMAN["Analyst review queue<br/>mandatory for high stakes + negative verdict,<br/>injection flagged, any failure"]
+
+    subgraph ESC["P5: Escalation payload"]
+      FACT["Fact sheet builder<br/>counts, relative sequence, ports, outcomes,<br/>privasoc tokens, claim results, local verdicts<br/>no attacker free text by default"]
+      GUARD["Local residual pass + leak guard<br/>refuse any original value"]
+      TOOLS["P6 read-only tools, optional<br/>field values, counts, timeline<br/>alert window only, max N calls"]
+      FVAL["Validate frontier answer<br/>same checks + claims vs fact sheet"]
+      MERGE["Escalated record<br/>local + frontier verdicts,<br/>disagreement flag, provenance"]
+    end
+
+    ANALYST["Analyst<br/>closes TP / benign / FP"]
+
+    subgraph MEAS["P7 + P8: Measurement and learned routing"]
+      AUDIT["Random audit sampler<br/>3 % of closed alerts + all disagreements<br/>batched daily"]
+      DATA[("Signals + outcomes dataset")]
+      LEARN["Calibrator or conformal sets<br/>replaces v1 thresholds when data allows"]
+    end
+  end
+
+  subgraph GW["Zone 2: Egress gateway (sovgate, loopback, authenticated)"]
+    GIN["OpenAI-compatible API<br/>tenant privasoc, session = alert id"]
+    GVER["Verifier, not a 2nd pseudonymiser<br/>privasoc token shapes allowlisted,<br/>unmapped IP or MAC: block"]
+    GSPOT["Injection scan + spotlighting<br/>random per-request boundaries"]
+    GBLOCK["No egress<br/>block reason or 503 returned"]
+    GRE["Restore residual tokens<br/>text + tool-call JSON"]
+    GAUD[("Hash-chained audit<br/>counts and decisions only")]
+  end
+
+  subgraph EXT["Zone 3: External"]
+    FRONTIER["Frontier model API<br/>sees the fact sheet with tokens only"]
+    TEACH["P9 Teacher, offline batches<br/>synthetic or pseudonymised cases:<br/>Sigma fixes, prompt examples, LoRA data"]
+  end
+
+  %% main flow
+  SRC --> PLANES
+  PLANES -->|alert| ENRICH
+  ENRICH --> EVID
+  EVID --> MA
+  EVID --> MB
+  MA --> VALID
+  MB --> VALID
+  MA --> CLAIMS
+  VALID --> SIGNALS
+  CLAIMS --> SIGNALS
+  MB -->|verdict B| SIGNALS
+  SIGNALS --> ROUTER
+  ENRICH -->|stakes| ROUTER
+
+  ROUTER -->|"low stakes, A and B agree, no problem"| LOCALV
+  ROUTER -->|"high stakes + negative verdict,<br/>injection flagged"| HUMAN
+  ROUTER ==>|"disagreement, false claim,<br/>persistent needs_more_info"| FACT
+
+  %% escalation
+  FACT ==> GUARD ==>|fact sheet| GIN
+  GIN ==> GVER ==> GSPOT ==> FRONTIER
+  GVER -->|leak found| GBLOCK
+  GSPOT -->|injection flagged| GBLOCK
+  FRONTIER -.->|"tool calls, optional"| GIN
+  GIN -.-> TOOLS
+  TOOLS -.->|pseudonymised results| GIN
+  FRONTIER ==>|answer| GRE ==> FVAL ==> MERGE
+  GBLOCK -->|reason| HUMAN
+  GUARD -->|"leak, gateway down, budget exhausted"| HUMAN
+  FVAL -->|invalid| HUMAN
+
+  GVER --> GAUD
+  GBLOCK --> GAUD
+  GRE --> GAUD
+
+  LOCALV --> ANALYST
+  HUMAN --> ANALYST
+  MERGE ==> ANALYST
+
+  %% measurement
+  ANALYST -->|closure| DATA
+  SIGNALS -->|logged| DATA
+  ANALYST -->|closed alerts| AUDIT
+  AUDIT -.->|batch, fact sheets| FACT
+  DATA -.-> LEARN
+  LEARN -.->|later| ROUTER
+
+  %% teacher
+  DATA -.->|hard cases, pseudonymised| TEACH
+  TEACH -.->|"proposals, human approval"| PLANES
+
+  classDef existing fill:#eceff1,stroke:#607d8b,color:#263238
+  classDef newpart fill:#fff3e0,stroke:#e65100,color:#3e2723
+  classDef gate fill:#fffde7,stroke:#f9a825,color:#3e2723
+  classDef safe fill:#ffebee,stroke:#c62828,color:#3e2723
+  classDef gw fill:#e3f2fd,stroke:#1565c0,color:#0d2b4e
+  classDef ext fill:#fce4ec,stroke:#ad1457,color:#4a0e2b
+  classDef src fill:#ffffff,stroke:#9e9e9e,color:#424242,stroke-dasharray: 4 3
+
+  class PLANES,EVID,MA,VALID,GUARD,ANALYST,LOCALV existing
+  class ENRICH,MB,CLAIMS,SIGNALS,FACT,TOOLS,FVAL,MERGE,AUDIT,DATA,LEARN newpart
+  class ROUTER gate
+  class HUMAN,GBLOCK safe
+  class GIN,GVER,GSPOT,GRE,GAUD gw
+  class FRONTIER,TEACH ext
+  class SRC src
+
+  style LOCAL fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+  style GW fill:#e8f1fb,stroke:#1565c0,stroke-width:2px
+  style EXT fill:#fdf0f4,stroke:#ad1457,stroke-width:2px

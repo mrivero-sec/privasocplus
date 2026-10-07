@@ -1,0 +1,10 @@
+# Explicit opt-in only. Remote triage is still a human action (D53).
+services:
+  privasoc:
+    environment:
+      PRIVASOC_LLM_REMOTE_URL: http://sovgate:8080/v1
+      PRIVASOC_LLM_REMOTE_API_KEY: ${SOVGATE_PRIVASOC_KEY:?set SOVGATE_PRIVASOC_KEY}
+    depends_on:
+      sovgate:
+        condition: service_healthy
+        required: true

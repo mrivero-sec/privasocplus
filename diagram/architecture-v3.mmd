@@ -1,0 +1,54 @@
+---
+config:
+  flowchart:
+    wrappingWidth: 300
+---
+flowchart TB
+  SRC["Sources de logs<br/>champs contrôlés par un attaquant"]
+  subgraph L["privasoc : frontière locale"]
+    COL["Collecte, approbation des émetteurs<br/>parsing et détection"]
+    CTX["P2 prévu : contexte local<br/>historique, inventaire, IOC"]
+    EVI["Preuves pseudonymisées<br/>enveloppe document échappée"]
+    MA["Triage local A"]
+    MB["P3 prévu : modèle B<br/>affirmations vérifiées et signaux"]
+    ROUTE{"P4 prévu : routage<br/>obligations humaines prioritaires<br/>enjeu fixé par règle et inventaire"}
+    LOCAL["Verdict local conservé"]
+    HUMAN["Revue humaine obligatoire<br/>injection, fuite, panne, budget épuisé<br/>enjeu élevé + négatif ou invalide"]
+    FACT["P5 prévu : fiche de faits<br/>caractéristiques calculées localement<br/>pas de texte attaquant par défaut"]
+    GUARD["Passe résiduelle locale + garde I10<br/>manifeste des jetons IP/MAC du coffre"]
+    VAL["Validation de la réponse<br/>signal d'injection conservé"]
+    ANALYST["Analyste : clôture TP, bénin ou FP"]
+    AUDIT["P7 prévu : audit des alertes closes<br/>échantillon aléatoire distinct des désaccords<br/>adjudication humaine indépendante"]
+    LEARN["P8/P9 prévus : routage appris<br/>et amélioration locale hors ligne"]
+    TOOL["P6 prévu : outils limités<br/>lecture seule, résultats pseudonymisés"]
+  end
+  subgraph G["sovgate : réseau interne dédié, client authentifié"]
+    VER["Vérificateur strict<br/>adresse non déclarée : refus<br/>manifeste retiré avant l'amont"]
+    NER["NER actif en déploiement<br/>scan d'injection et spotlighting<br/>échec détecteur : refus"]
+    LOG["Audit : types, comptes et décisions<br/>aucune valeur ni manifeste"]
+  end
+  EXT["Modèle frontière<br/>option explicitement activée"]
+  NET["Composition : privasoc sans réseau Internet<br/>Vector sur ingestion seule<br/>Ollama local de confiance, réseau de téléchargement<br/>sovgate sur réseau fournisseur ; ports loopback"]
+  SRC --> COL --> EVI --> MA --> LOCAL --> ANALYST
+  COL -.-> CTX -.-> EVI
+  EVI -.-> MB -.-> ROUTE
+  MA -.-> ROUTE
+  ROUTE -. local .-> LOCAL
+  ROUTE -. obligation humaine .-> HUMAN
+  ROUTE -. avis distant .-> FACT -.-> GUARD
+  EVI -->|"triage distant sur action humaine actuelle"| GUARD
+  GUARD --> VER --> NER --> EXT --> VAL --> ANALYST
+  GUARD -->|refus| HUMAN
+  VER -->|adresse non déclarée| HUMAN
+  NER -->|échec détecteur| HUMAN
+  VAL -->|"injection signalée ou réponse invalide"| HUMAN
+  HUMAN --> ANALYST
+  VER --> LOG
+  NER --> LOG
+  ANALYST -.-> AUDIT -.-> LEARN
+  FACT -. outils optionnels .-> TOOL
+  NET --- COL
+  classDef planned fill:#fff3e0,stroke:#e65100,stroke-dasharray:5 4
+  classDef safe fill:#ffebee,stroke:#c62828
+  class CTX,MB,ROUTE,FACT,AUDIT,LEARN,TOOL planned
+  class HUMAN,GUARD safe
