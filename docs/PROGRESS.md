@@ -23,7 +23,7 @@ Le triage distant reste une action humaine (D53 de privasoc) : rien n'escalade a
 | `packages/privasoc` | ancien dépôt `privasoc`, branche `privasoc-plus` | `257c7b8` |
 | `packages/gateway` | ancien dépôt `sovereign-llm-gateway`, branche `privasoc-plus` | `d2c81db` |
 
-Les hashes cités plus bas (`bdaad37`, `945ae9c`, `a67fad3`...) désignent des commits des anciens dépôts, qui restent consultables là-bas mais ne reçoivent plus rien. Rien n'est poussé : l'anonymat du dépôt distant est à trancher avant (N41).
+Les hashes cités plus bas (`bdaad37`, `945ae9c`, `a67fad3`...) désignent des commits des anciens dépôts, qui restent consultables là-bas mais ne reçoivent plus rien. Poussé par l'opérateur le 2026-10-07 sur le dépôt distant `privasocplus` (N42).
 
 ## Ce qui a été fait
 
@@ -117,7 +117,7 @@ python3 -m venv ~/venvs/sovgate && ~/venvs/sovgate/bin/pip install -e ".[dev]"
 
 ## Prochaines actions (dans l'ordre)
 
-0. **Trancher l'anonymat du dépôt distant** (N41) avant le premier push du monorepo, puis archiver les deux anciens dépôts sur GitHub. Lancer une fois la suite privasoc avec Vector depuis `packages/privasoc` (206 attendus).
+0. Archiver les deux anciens dépôts sur GitHub. Décider si la règle d'anonymat (AGENTS règle 2) est amendée, le dépôt étant publié sous un compte nominatif (N42). Lancer une fois la suite privasoc avec Vector depuis `packages/privasoc` (206 attendus).
 
 Suivi sécurité N35 : auditer les implémentations des deux paquets (`packages/`). Le rapport du scan `b0283784-124e-4034-aaa6-cdc5283580c7` est conservé dans le workbench Codex Security, avec modèle de menace et couverture. Audit hors ligne par lecture statique, sans nouveaux tests ou appels distants ; aucune branche ni aucun commit source modifié. Docker, NER réel et comportement de panne restent à vérifier.
 

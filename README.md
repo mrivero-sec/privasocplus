@@ -1,87 +1,104 @@
 # privasoc+
 
-Fusion de **privasoc** (SOC local, triage d'alertes par un LLM local) et de **sovereign-llm-gateway** (sovgate, passerelle de sortie qui pseudonymise, vérifie et audite). Objectif : qu'une alerte mal traitée par le modèle local puisse recevoir un second avis d'un modèle frontière, ou partir chez l'analyste, sans que des données personnelles en clair ne sortent.
+**Un SOC local qui trie ses alertes avec un petit LLM local, et ne demande un second avis à un modèle frontière qu'à travers une passerelle qui vérifie que rien de personnel ne sort.**
 
-Un seul dépôt, deux paquets (DECISIONS PD29) :
+privasoc+ réunit deux briques dans un seul dépôt :
 
-| Chemin | Contenu |
-|---|---|
-| [packages/privasoc](packages/privasoc) | SOC local : collecte Vector, parseurs écrits par le modèle local, détection Sigma, triage, banc d'évaluation |
-| [packages/gateway](packages/gateway) | sovgate, la passerelle de sortie : vérification des jetons, spotlighting, audit chaîné |
-| [integration/](integration/) | tests de contrat entre les deux |
-| [deploy/](deploy/) | composition Docker |
-
-```bash
-uv sync --all-packages                       # les deux paquets, un seul environnement
-cd packages/privasoc && uv run privasoc --help
-```
-
-Les anciens dépôts `privasoc` et `sovereign-llm-gateway` sont arrêtés.
+- **privasoc** : collecte de logs (Vector), parseurs écrits par le modèle local et approuvés par un humain, détection Sigma, triage structuré des alertes, banc d'évaluation. Tout est pseudonymisé avant d'atteindre un modèle, même local.
+- **sovgate** : passerelle de sortie compatible OpenAI. Pour privasoc, elle ne pseudonymise pas une seconde fois : elle **vérifie** que seuls des jetons émis par privasoc sortent, isole les preuves (spotlighting contre l'injection) et tient un journal d'audit chaîné.
 
 Assistants IA : commencez par [AGENTS.md](AGENTS.md).
 
-## État actuel (2026-10-07)
+## État (2026-10-07)
 
-- **Un seul projet** : le code des deux anciens dépôts est importé dans `packages/` (historique git neuf, PD29, N40). L'état local de privasoc (`.env`, `data/`) est copié dans `packages/privasoc/`, ignoré par git. Rien n'est poussé : l'anonymat du dépôt distant reste à trancher (N41).
+| Phase | État |
+|---|---|
+| P1 Sortie sécurisée privasoc vers sovgate | implémentée, testée avec un fournisseur simulé ; Docker et NER réel encore à valider |
+| P0 Mesure du triage | banc de 38 cas et harnais livrés, seuils fixés avant toute mesure ; **aucun résultat de modèle encore** |
+| P2 à P10 Enrichissement, signaux, routage, fiche de faits | à faire ([plan](docs/INTEGRATION_PLAN.md)) |
 
-- Audit statique Codex Security de ce dossier terminé (N35) : aucune vulnérabilité étayée dans le contenu examiné. Couverture partielle pour les contrôles opérationnels ; les deux dépôts sources ne sont pas audités. Docker et NER réel restent à valider.
+Le triage distant reste une action humaine : rien n'escalade automatiquement. Détail et reprise : [docs/PROGRESS.md](docs/PROGRESS.md).
 
-- **P1 implémenté et testé avec fournisseur simulé, validation Docker et NER réel restante. P0 : banc et harnais livrés, aucune mesure de modèle local ou distant.** Code importé dans `packages/` (N40).
-- L'idée de départ (« si la confiance du modèle local est sous 70 %, escalader ») a été **remplacée** (DECISIONS PD0) par une architecture à base d'enrichissement local, de signaux vérifiables et de règles d'enjeu (PD10 à PD18).
-- Reprise : [docs/PROGRESS.md](docs/PROGRESS.md) (fait, où, comment vérifier, prochaines actions).
-- Revue 3 : manifeste IP/MAC strict, intervalles par familles, déploiement isolé et diagramme v3. Vérifications : 173 tests privasoc, 89 sovgate, 8 contrats et 3 contrôles Compose passants ; 29 tests privasoc ignorés sans Vector. Ruff et Gitleaks passent. Commits locaux `945ae9c` / `d2c81db`.
-- Lancement local vérifié : API et tableau de bord authentifié sur `http://127.0.0.1:8000/ui/`, Vector sur loopback `5514` TCP/UDP, Ollama local avec `qwen3:8b` disponible. Docker Desktop échoue sur son socket temporaire d'inférence Windows ; la composition Docker reste non validée. Aucun appel distant activé.
-- Samples publics téléchargés et importés automatiquement pour tester : 7 fichiers, 6 111 lignes ; 13 normalisées, 6 098 en quarantaine ; 6 essais de parseur local en deux tentatives, tous `needs_escalation`, aucune alerte. Protocole et sources dans [docs/MANUAL_SAMPLES.md](docs/MANUAL_SAMPLES.md). Données et rapports détaillés dans `privasoc/data/samples-manual/`, ignorés par Git.
-
-## Architecture retenue (v3)
+## Architecture
 
 ![Architecture v3](diagram/architecture-v3.png)
 
-La v3 distingue les contrôles implémentés des phases P2 à P10 prévues.
+1. **Enrichir d'abord** avec du contexte local (historique de l'hôte, alertes passées de la règle, inventaire, IOC locaux), puis relancer le triage local.
+2. **Détecter l'incertitude par des faits** : désaccord entre deux modèles locaux, affirmations du modèle vérifiées dans la base, contrôles de validation. La confiance que le modèle se donne n'est qu'un signal secondaire ([pourquoi](docs/alternatives.md)).
+3. **Router selon l'enjeu** vers le local, un modèle frontière ou l'analyste. Un verdict « bénin » sur une alerte grave va toujours à l'analyste ; le modèle frontière n'abaisse jamais seul un verdict.
+4. **Envoyer une fiche de faits**, pas les logs : résumé structuré et pseudonymisé, sans chaînes contrôlées par l'attaquant.
+5. **privasoc pseudonymise, sovgate vérifie** : seule la passerelle a accès au fournisseur ; une adresse absente du manifeste de jetons bloque l'envoi.
+6. **Mesurer en continu** par audit aléatoire des alertes closes ; plus tard, routage appris et modèle frontière « professeur » du modèle local.
 
-1. **Enrichir d'abord** : contexte local (historique de l'hôte, alertes passées de la règle, inventaire des actifs, correspondances IOC locales), puis relance du triage local.
-2. **Détecter l'incertitude par des faits** : deux modèles locaux de familles différentes (désaccord), affirmations du modèle vérifiées dans la base, contrôles de validation existants. La confiance déclarée n'est qu'un signal secondaire.
-3. **Router vers trois destinations** selon l'enjeu : local, frontière ou analyste. Un verdict « bénin » sur une alerte grave va toujours à l'analyste ; le modèle frontière n'abaisse jamais seul un verdict.
-4. **Envoyer une fiche de faits**, pas les logs : résumé structuré et pseudonymisé, sans chaînes contrôlées par l'attaquant. En option, le modèle frontière peut demander un champ précis par outil.
-5. **privasoc pseudonymise, sovgate vérifie** : la composition isole la sortie fournisseur dans sovgate. Le profil strict refuse les adresses absentes du manifeste des jetons issus du coffre ; les noms résiduels passent par GLiNER dans le déploiement. Ces contrôles sont testables, sans garantie universelle d’anonymisation.
-6. **Mesurer en continu** par audit aléatoire des alertes closes, en lot ; plus tard, routage appris (calibration ou prédiction conforme) et modèle frontière comme professeur du local.
+Les points 1 à 4 et 6 sont planifiés ; le point 5 et la mesure (banc de triage) sont implémentés.
 
-## Points durs identifiés
+## Organisation
 
-- La confiance auto-déclarée d'un modèle 8B est surconfiante et manipulable par injection ([metrics.md](docs/metrics.md) section 1).
-- Les détecteurs de sovgate re-tokenisent les jetons privasoc et prennent des horodatages et des SID pour des cartes bancaires (constats N1, N2) : d'où le rôle de vérificateur (PD5).
-- `ensure_local` refuse désormais la passerelle distante, ses alias DNS et une passerelle reconnue ; un serveur LAN inconnu reste un composant de confiance (N28).
-- privasoc n'autorise aujourd'hui le distant que sur action humaine (D53) : l'escalade automatique sera optionnelle et désactivée par défaut (PD7, future D58).
-- Des logs pseudonymisés restent des données personnelles ; prérequis juridiques avant tout usage sur données de tiers ([constraints.md](docs/constraints.md) section 2).
+| Chemin | Contenu |
+|---|---|
+| [packages/privasoc](packages/privasoc) | SOC local (paquet `privasoc`, CLI `privasoc`) |
+| [packages/gateway](packages/gateway) | passerelle sovgate (paquet `sovereign-llm-gateway`) |
+| [integration/](integration/) | tests de contrat entre les deux |
+| [deploy/](deploy/) | composition Docker : privasoc, Vector, modèle local, passerelle en option |
+| [docs/](docs/), [diagram/](diagram/) | conception, décisions, plan, avancement |
 
-## Carte des fichiers
+Un workspace [uv](https://docs.astral.sh/uv/) : un `pyproject.toml` et un `uv.lock` à la racine.
 
-| Fichier | Contenu | État |
-|---|---|---|
-| [AGENTS.md](AGENTS.md) | Règles et ordre de lecture pour les assistants IA | à jour |
-| [docs/CONTEXT.md](docs/CONTEXT.md) | Résumé des deux paquets | à jour |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | Journal des décisions (PD), constats (N), questions ouvertes (Q) | à jour |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | Journal d'avancement : fait, commits, vérification, prochaines actions | à jour |
-| [packages/privasoc/docs/DECISIONS.md](packages/privasoc/docs/DECISIONS.md) | Journal historique de privasoc (D1 à D62, I1 à I48), figé | historique |
-| [docs/INTEGRATION_PLAN.md](docs/INTEGRATION_PLAN.md) | Plan en 11 phases, tableau de suivi | à jour |
-| [integration/](integration/) | Tests de contrat entre privasoc et sovgate | 8 tests passants |
-| [deploy/](deploy/) | Docker Compose privasoc + Vector + sovgate | réseaux séparés, local par défaut ; syntaxe vérifiée, démarrage restant |
-| [docs/alternatives.md](docs/alternatives.md) | Alternatives au seuil de confiance et combinaison retenue | à jour |
-| [docs/metrics.md](docs/metrics.md) | Calibration, règle de coût, catalogue de métriques, protocole d'évaluation | valable ; sa règle v1 (section 6) est adaptée par PD14 |
-| [docs/constraints.md](docs/constraints.md) | Sécurité, vie privée et droit, opérationnel, qualité, projet | analyse initiale ; décisions actuelles prioritaires |
-| [docs/feasibility.md](docs/feasibility.md) | Points d'intégration dans le code, contrat entre pseudonymiseurs, efforts | valable ; son plan (section 4.2) est remplacé par INTEGRATION_PLAN |
-| [docs/privacy-audit.md](docs/privacy-audit.md) | Audit : aucune donnée identifiante dans les documents | 2026-10-07 |
-| [diagram/architecture-v3.mmd](diagram/architecture-v3.mmd) (`.svg`, `.png`) | Architecture retenue et limites de déploiement | revue 3 |
-| [diagram/architecture-v2.mmd](diagram/architecture-v2.mmd) (`.svg`, `.png`) | Architecture avant la revue du contrat et des priorités | historique |
-| [diagram/diagram-notes.md](diagram/diagram-notes.md) | Notes des diagrammes, séquence d'une escalade | v3 actuelle, v1 et v2 historiques |
-| [diagram/diagram.mmd](diagram/diagram.mmd) (`.svg`, `.png`), `sequence.svg` | Architecture v1, centrée sur le seuil | historique |
+## Démarrer
 
-Les estimations de coût et l'exemple numérique de metrics.md sont des hypothèses, signalées comme telles. Rien ici n'est un avis juridique.
+Prérequis : uv, le binaire [Vector](https://vector.dev/download/) (bac à sable des parseurs) et un serveur compatible OpenAI pour le modèle local, par exemple [Ollama](https://ollama.com) avec `qwen3:8b`.
 
-Vérification de la reprise parsing : 205 tests avec Vector, Ruff et Gitleaks passants ; commit local `da0351d` (N37).
+```bash
+uv sync --all-packages
+cd packages/privasoc
+uv run privasoc init                 # écrit .env avec des secrets neufs ; y régler le modèle et Vector
+uv run privasoc serve                # API et interface de revue sur http://127.0.0.1:8000/ui/
+```
 
-Linux enrichi à la demande de l’opérateur (N38) : candidat `90198064` conservé en revue,
-2 000 lignes vérifiées avec extraction processus/PID, IP, utilisateur et résultat.
-La normalisation en base reste 2 030 événements, 4 081 lignes en quarantaine.
+Le guide complet de privasoc (onboarding d'une source, parseurs, détection, triage, hunting) est dans [packages/privasoc/README.md](packages/privasoc/README.md) ; celui de la passerelle dans [packages/gateway/README.md](packages/gateway/README.md). Déploiement Docker : [deploy/README.md](deploy/README.md).
 
-Commit de l’extraction Linux : `257c7b8` ; 206 tests avec Vector, Ruff et Gitleaks passants (N39).
+### Mesurer le triage
+
+```bash
+cd packages/privasoc
+uv run privasoc eval triage --set all --runs 3     # modèle local
+uv run privasoc eval triage-report                 # reports/triage.md
+```
+
+Protocole et seuils, fixés avant tout résultat : [docs/DECISIONS.md](docs/DECISIONS.md) (PD23) et le journal historique de privasoc (D57).
+
+### Tests
+
+```bash
+uv run ruff check .
+(cd packages/privasoc && uv run pytest -q)       # les tests Vector sont ignorés sans le binaire
+(cd packages/gateway && uv run pytest -q)
+uv run pytest -q integration
+```
+
+## Documentation
+
+| Fichier | Contenu |
+|---|---|
+| [docs/PROGRESS.md](docs/PROGRESS.md) | ce qui est fait, comment le vérifier, prochaines actions |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | journal des décisions (PD), constats (N), questions ouvertes (Q) |
+| [docs/INTEGRATION_PLAN.md](docs/INTEGRATION_PLAN.md) | plan en 11 phases et suivi |
+| [docs/CONTEXT.md](docs/CONTEXT.md) | fonctionnement des deux paquets |
+| [docs/alternatives.md](docs/alternatives.md) | pourquoi pas un simple seuil de confiance |
+| [docs/metrics.md](docs/metrics.md) | calibration, règle de coût, métriques, protocole d'évaluation |
+| [docs/constraints.md](docs/constraints.md) | sécurité, vie privée et droit, exploitation |
+| [docs/feasibility.md](docs/feasibility.md) | analyse d'intégration initiale |
+| [docs/MANUAL_SAMPLES.md](docs/MANUAL_SAMPLES.md) | essais d'ingestion sur des samples publics |
+| [diagram/diagram-notes.md](diagram/diagram-notes.md) | notes des diagrammes (v3 actuelle, v1 et v2 historiques) |
+| [packages/privasoc/docs/DECISIONS.md](packages/privasoc/docs/DECISIONS.md) | journal historique de privasoc (D1 à D62, I1 à I48), figé |
+
+## Limites connues
+
+- La confiance déclarée par un modèle 8B est surconfiante et manipulable par injection ; elle ne sert pas seule à router ([metrics.md](docs/metrics.md)).
+- Les preuves de triage ne contiennent que les événements qui ont déclenché la règle, et les noms de domaine et d'utilisateur pseudonymisés masquent ce qui les rendait suspects (constat N27) : c'est l'objet des phases P2 et P5.
+- Un serveur de modèle inconnu sur le réseau local reste un composant de confiance (N28).
+- Des logs pseudonymisés restent des données personnelles : prérequis juridiques avant tout usage sur des données de tiers ([constraints.md](docs/constraints.md)). Rien ici n'est un avis juridique.
+
+## Licence
+
+MIT, voir [LICENSE](LICENSE). Le modèle NER par défaut de la passerelle, `urchade/gliner_multi_pii-v1`, est sous Apache-2.0 ; les règles SigmaHQ (DRL 1.1) et les fixtures Elastic (ELv2) sont téléchargées à l'exécution et jamais committées.
